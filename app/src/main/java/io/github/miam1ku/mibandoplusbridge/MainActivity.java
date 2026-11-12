@@ -104,6 +104,7 @@ public final class MainActivity extends AppCompatActivity {
     private boolean profileAfterRestore;
     private boolean rootGranted;
     private boolean probingRoot;
+    private boolean sleepPauseWriting;
     private Change pendingPermission;
 
     /** Open the profile window when this restore task succeeded and the user came in from the capture entry. */
@@ -197,20 +198,49 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout sleepCard = screen.card();
         MaterialSwitch sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
                 "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。打开开关时如果已经入睡，会在下一次入睡时生效。"
-                        + "通过睡眠记录报告入睡的手环，会在记录同步后暂停，通常需要几分钟。");
-        final boolean[] writingSleepPause = {false};
+                        + "此功能使用手环实时睡眠状态判断，并在开启前提示可能影响睡眠图的风险。");
         sleepPause.setChecked(SleepMusic.enabled(this));
         sleepPause.setOnCheckedChangeListener((button, checked) -> {
-            if (writingSleepPause[0]) return;
-            if (SleepMusic.setEnabled(this, checked)) {
-                BandLiveService.sleepPauseChanged(this);
-                return;
+            if (sleepPauseWriting) return;
+            if (checked) {
+                confirmSleepPause(button);
+            } else {
+                applySleepPause(button, false);
             }
-            writingSleepPause[0] = true;
-            button.setChecked(!checked);
-            writingSleepPause[0] = false;
-            ownershipStatus.setText("开关状态保存中断，再拨一次即可。");
         });
+    }
+
+    private void confirmSleepPause(android.widget.CompoundButton toggle) {
+        setSleepPauseChecked(toggle, false);
+        toggle.setEnabled(false);
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("开启后可能影响睡眠图，确定开启？")
+                .setMessage("部分小米手环在同步时会把正在记录的睡眠文件封存，并产生短暂的“清醒”记录。"
+                        + "桥接已改为入睡期间推迟历史同步，手环固件仍按自身规则处理同步边界，这项风险依然存在。"
+                        + "如果睡眠图对你更重要，建议保持关闭。")
+                .setCancelable(false)
+                .setNegativeButton("保持关闭", (dialog, which) -> toggle.setEnabled(true))
+                .setPositiveButton("仍然开启", (dialog, which) -> {
+                    toggle.setEnabled(true);
+                    applySleepPause(toggle, true);
+                })
+                .show();
+    }
+
+    private void applySleepPause(android.widget.CompoundButton toggle, boolean enabled) {
+        if (SleepMusic.setEnabled(this, enabled)) {
+            setSleepPauseChecked(toggle, enabled);
+            BandLiveService.sleepPauseChanged(this);
+            return;
+        }
+        setSleepPauseChecked(toggle, !enabled);
+        ownershipStatus.setText("开关状态保存中断，再拨一次即可。");
+    }
+
+    private void setSleepPauseChecked(android.widget.CompoundButton toggle, boolean checked) {
+        sleepPauseWriting = true;
+        toggle.setChecked(checked);
+        sleepPauseWriting = false;
     }
 
     private void buildHelp() {
