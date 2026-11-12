@@ -41,7 +41,10 @@ public final class OHealthDeviceHook {
     private static final long PANEL_FINISH_GUARD_MS = 15_000L;
     private static final Set<String> PANEL_HIDDEN_LABELS = Set.of(
             "我的表盘", "My faces", "My watch faces",
-            "系统更新", "System update", "Software update");
+            "系统更新", "System update", "Software update",
+            "闹钟", "Alarm", "Alarms", "Alarm clock");
+    private static final Set<String> PANEL_HIDDEN_LOGGED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private static volatile Bundle snapshot;
     private static volatile String remembered;
@@ -145,6 +148,8 @@ public final class OHealthDeviceHook {
             }
         }));
         HookRuntime.tryHook("OHEALTH_DEVICE_PAGES_UNAVAILABLE", () -> installDevicePages(loader));
+        HookRuntime.tryHook("OHEALTH_DEVICE_TAB_CLEANUP_UNAVAILABLE",
+                () -> installDeviceTabCleanup(loader));
         HookRuntime.tryHook("OHEALTH_DEVICE_PANEL_UNAVAILABLE", () -> installNativePanel(loader));
         HookRuntime.tryHook("OHEALTH_DEVICE_CLEANUP_UNAVAILABLE", () -> installEmptyCloudCleanup(loader));
         HookRuntime.tryHook("OHEALTH_DEVICE_IMAGE_UNAVAILABLE", () -> installDeviceImage(loader));
@@ -293,23 +298,20 @@ public final class OHealthDeviceHook {
                     "com.heytap.health.watchpair.view.WatchView", loader);
             XC_MethodHook paint = new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
-                    applyBody(param.thisObject);
+                    if (watchInBandRow(param.thisObject)) paintWatchBody(param.thisObject);
                 }
             };
-            XposedHelpers.findAndHookMethod(watch, "updateId", boolean.class, paint);
-            XposedHelpers.findAndHookMethod(watch, "setBlackFaceView", paint);
-            XposedHelpers.findAndHookMethod(watch, "runOrPostponeUntilResReady", Runnable.class,
-                    new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            if (!(param.args[0] instanceof Runnable host)) return;
-                            Object view = param.thisObject;
-                            param.args[0] = (Runnable) () -> {
-                                host.run();
-                                applyBody(view);
-                            };
-                        }
-                    });
-            HookRuntime.log("OHEALTH_DEVICE_IMAGE_HOOK watch");
+            int hooked = 0;
+            for (String name : new String[]{"updateId", "setBlackFaceView",
+                    "setAutoDownloadRes", "setResDownloadUpdateCallback", "d", "m", "f", "j"}) {
+                try {
+                    XposedBridge.hookAllMethods(watch, name, paint);
+                    hooked++;
+                } catch (Throwable unavailable) {
+                    // Host versions keep only a subset of these obfuscated update methods.
+                }
+            }
+            HookRuntime.log("OHEALTH_DEVICE_IMAGE_HOOK watch=" + hooked);
         } catch (Throwable failure) {
             HookRuntime.log("OHEALTH_DEVICE_IMAGE_HOOK_UNAVAILABLE watch "
                     + failure.getClass().getSimpleName());
@@ -329,13 +331,47 @@ public final class OHealthDeviceHook {
             if (uri.isEmpty() || watch == null) return;
             Bundle shown = display();
             if (shown == null) return;
-            Object mac = XposedHelpers.getObjectField(watch, "mDeviceMac");
+            Object mac = fieldValue(watch, "mDeviceMac");
+            if (mac == null) return;
             if (!io.github.miam1ku.mibandoplusbridge.data.MacIds.same(
                     shown.getString("mac", ""), String.valueOf(mac))) return;
+            paintWatchBody(watch);
+        } catch (Throwable failure) {
+            HookRuntime.log("OHEALTH_DEVICE_IMAGE_FAILED " + failure.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * New WatchView keeps getShellView but no longer exposes mDeviceMac. Callers that already
+     * identified the selected wearable use this trusted path.
+     */
+    private static void paintWatchBody(Object watch) {
+        try {
+            String uri = imageUri();
+            if (uri.isEmpty() || watch == null) return;
             Object shell = XposedHelpers.callMethod(watch, "getShellView");
             if (!(shell instanceof android.widget.ImageView image)) return;
+            loadDeviceImage(image, uri);
+            try {
+                XposedHelpers.callMethod(watch, "setFaceViewVisibility", android.view.View.GONE);
+            } catch (Throwable ignored) { }
+            Object face = fieldValue(watch, "l");
+            if (face instanceof View view) view.setVisibility(View.GONE);
+            try {
+                Object video = XposedHelpers.getObjectField(watch, "mFlVideoLayout");
+                if (video instanceof android.view.View view) view.setVisibility(android.view.View.GONE);
+            } catch (Throwable ignored) { }
+        } catch (Throwable failure) {
+            HookRuntime.log("OHEALTH_DEVICE_IMAGE_FAILED " + failure.getClass().getSimpleName());
+        }
+    }
+
+    private static void loadDeviceImage(android.widget.ImageView image, String uri) {
+        if (image == null || uri == null || uri.isEmpty()) return;
+        try {
             image.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
-            ClassLoader loader = watch.getClass().getClassLoader();
+            image.setVisibility(View.VISIBLE);
+            ClassLoader loader = image.getClass().getClassLoader();
             Class<?> glide = Class.forName("com.bumptech.glide.Glide", false, loader);
             Object request = glide.getMethod("with", android.view.View.class).invoke(null, image);
             Object builder;
@@ -344,17 +380,27 @@ public final class OHealthDeviceHook {
             } catch (NoSuchMethodException missing) {
                 builder = request.getClass().getMethod("load", Object.class).invoke(request, uri);
             }
-            builder.getClass().getMethod("into", android.widget.ImageView.class).invoke(builder, image);
-            try {
-                XposedHelpers.callMethod(watch, "setFaceViewVisibility", android.view.View.GONE);
-            } catch (Throwable ignored) { }
-            try {
-                Object video = XposedHelpers.getObjectField(watch, "mFlVideoLayout");
-                if (video instanceof android.view.View view) view.setVisibility(android.view.View.GONE);
-            } catch (Throwable ignored) { }
+            builder.getClass().getMethod("into", android.widget.ImageView.class)
+                    .invoke(builder, image);
         } catch (Throwable failure) {
-            HookRuntime.log("OHEALTH_DEVICE_IMAGE_FAILED " + failure.getClass().getSimpleName());
+            HookRuntime.log("OHEALTH_DEVICE_IMAGE_LOAD_FAILED "
+                    + failure.getClass().getSimpleName());
         }
+    }
+
+    private static boolean watchInBandRow(Object watch) {
+        if (!(watch instanceof View view)) return false;
+        Bundle shown = display();
+        if (shown == null) return false;
+        String name = shown.getString("name", "");
+        if (name.isBlank()) return false;
+        View current = view;
+        for (int depth = 0; depth < 8; depth++) {
+            if (containsText(current, name)) return true;
+            if (!(current.getParent() instanceof View parent)) break;
+            current = parent;
+        }
+        return false;
     }
 
     /**
@@ -776,8 +822,15 @@ public final class OHealthDeviceHook {
 
     /** Discover wearable rows from BaseWearableItem. Names are matched after the scan. */
     private static void installDevicePages(ClassLoader loader) {
-        Class<?> eventType = XposedHelpers.findClass(
-                "com.heytap.health.device.flexadapter.refresh.EventType", loader);
+        if (!HOST.equals(android.app.Application.getProcessName())) return;
+        Class<?> eventType = null;
+        try {
+            eventType = XposedHelpers.findClass(
+                    "com.heytap.health.device.flexadapter.refresh.EventType", loader);
+        } catch (Throwable optional) {
+            HookRuntime.log("OHEALTH_WEARABLE_EVENT_TYPE_OPTIONAL "
+                    + optional.getClass().getSimpleName());
+        }
         List<String> items = wearableItemNames(loader);
         if (items.isEmpty()) {
             items = new ArrayList<>();
@@ -799,24 +852,28 @@ public final class OHealthDeviceHook {
             String activity = NATIVE_PAGES.get(simple);
             if (activity != null) openNativeHistory(className, activity, loader);
         }
+        installWearableRowFilter(loader, items);
         installHostNotifications(loader);
         installNotifyExtras(loader);
     }
 
     private static boolean hideWearableRow(String simple) {
         return HIDE_ITEMS.contains(simple)
+                || simple.contains("WatchFace")
+                || simple.contains("Clock")
+                || simple.contains("Alarm")
                 || simple.contains("Ota")
                 || simple.contains("Firmware")
                 || simple.contains("NewFunction")
-                || simple.endsWith("UpdateItem");
+                || simple.contains("UpdateItem");
     }
 
     private static List<String> wearableItemNames(ClassLoader loader) {
-        Class<?> base;
+        Class<?> base = null;
         try {
             base = Class.forName(WEARABLE_ITEM + "BaseWearableItem", false, loader);
         } catch (ClassNotFoundException missing) {
-            return List.of();
+            HookRuntime.log("OHEALTH_WEARABLE_BASE_OBFUSCATED");
         }
         android.content.pm.ApplicationInfo info = hostContext.getApplicationInfo();
         List<String> apks = new ArrayList<>();
@@ -835,8 +892,9 @@ public final class OHealthDeviceHook {
                     } catch (ClassNotFoundException | NoClassDefFoundError ignored) {
                         continue;
                     }
-                    if (type != base && base.isAssignableFrom(type)
-                            && !Modifier.isAbstract(type.getModifiers())) {
+                    if ((base == null || (type != base && base.isAssignableFrom(type)))
+                            && !Modifier.isAbstract(type.getModifiers())
+                            && Modifier.isPublic(type.getModifiers())) {
                         names.add(name);
                     }
                 }
@@ -844,6 +902,161 @@ public final class OHealthDeviceHook {
             }
         }
         return names;
+    }
+
+    /**
+     * 6.10.15 obfuscates most wearable row classes and has no EventType class. Hooking every
+     * concrete row's data/view update catches the rendered label independently of its class name.
+     */
+    private static void installWearableRowFilter(ClassLoader loader, List<String> itemNames) {
+        XC_MethodHook update = new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam param) {
+                Object item = param.thisObject;
+                if (item == null || param.args.length == 0) return;
+                View row = null;
+                if (param.args[0] instanceof View view) row = view;
+                if (row == null) row = wearableItemView(item);
+                if (row == null || !wearableItemIsBand(item, row)) return;
+                applyWearablePreview(item, row);
+                hideWearableLabel(item, row);
+            }
+        };
+        int hooked = 0;
+        for (String className : itemNames) {
+            try {
+                Class<?> type = Class.forName(className, false, loader);
+                for (String methodName : new String[]{"j", "k"}) {
+                    for (Method method : type.getDeclaredMethods()) {
+                        if (!methodName.equals(method.getName()) || Modifier.isStatic(method.getModifiers())
+                                || method.isBridge() || method.isSynthetic()
+                                || method.getReturnType() != void.class
+                                || method.getParameterCount() != 1) continue;
+                        Class<?> parameter = method.getParameterTypes()[0];
+                        if (parameter != Object.class && parameter != View.class) continue;
+                        try {
+                            XposedBridge.hookMethod(method, update);
+                            hooked++;
+                        } catch (Throwable unavailable) {
+                            HookRuntime.log("OHEALTH_WEARABLE_ROW_HOOK_FAILED "
+                                    + type.getSimpleName() + "." + methodName + " "
+                                    + unavailable.getClass().getSimpleName());
+                        }
+                    }
+                }
+            } catch (Throwable unavailable) {
+                // A class may only be referenced by this APK rather than defined in this process.
+            }
+        }
+        HookRuntime.log("OHEALTH_WEARABLE_ROW_HOOKS " + hooked + " classes=" + itemNames.size());
+    }
+
+    private static View wearableItemView(Object item) {
+        Object view = fieldValue(item, "t");
+        if (view instanceof View row) return row;
+        try {
+            Object called = XposedHelpers.callMethod(item, "getItemView");
+            if (called instanceof View row) return row;
+        } catch (Throwable ignored) { }
+        return null;
+    }
+
+    private static boolean wearableItemIsBand(Object item, View row) {
+        if (selectedBand(item)) return true;
+        Bundle shown = display();
+        if (shown == null) return false;
+        Object info = fieldValue(item, "s");
+        if (info != null) {
+            try {
+                if (ourMac(XposedHelpers.callMethod(info, "getMac"))) return true;
+            } catch (Throwable ignored) { }
+        }
+        String name = shown.getString("name", "");
+        return !name.isBlank() && containsText(row, name);
+    }
+
+    private static void hideWearableLabel(Object item, View row) {
+        String label = hiddenLabel(row);
+        if (label == null) return;
+        hideView(row);
+        if (PANEL_HIDDEN_LOGGED.add("wearable:" + label)) {
+            HookRuntime.log("OHEALTH_WEARABLE_ROW_HIDDEN label=" + label
+                    + " class=" + item.getClass().getSimpleName());
+        }
+    }
+
+    private static String hiddenLabel(View view) {
+        if (view instanceof TextView text) {
+            String value = text.getText() == null ? "" : text.getText().toString().trim();
+            if (isDeviceRowHiddenLabel(value)) return value;
+        }
+        if (!(view instanceof ViewGroup group)) return null;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            String found = hiddenLabel(group.getChildAt(index));
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    static boolean isDeviceRowHiddenLabel(String value) {
+        return value != null && PANEL_HIDDEN_LABELS.contains(value.trim());
+    }
+
+    private static boolean containsText(View view, String wanted) {
+        if (view instanceof TextView text) {
+            String value = text.getText() == null ? "" : text.getText().toString().trim();
+            if (wanted.equals(value)) return true;
+        }
+        if (!(view instanceof ViewGroup group)) return false;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            if (containsText(group.getChildAt(index), wanted)) return true;
+        }
+        return false;
+    }
+
+    private static void applyWearablePreview(Object item, View row) {
+        String uri = imageUri();
+        if (uri.isEmpty()) return;
+        Object watch = fieldValue(item, "E");
+        if (watch != null) paintWatchBody(watch);
+        for (String field : new String[]{"F", "P"}) {
+            Object image = fieldValue(item, field);
+            if (image instanceof android.widget.ImageView view) loadDeviceImage(view, uri);
+        }
+        if (row.getVisibility() == View.VISIBLE && PANEL_HIDDEN_LOGGED.add("preview:")) {
+            HookRuntime.log("OHEALTH_WEARABLE_PREVIEW class=" + item.getClass().getSimpleName());
+        }
+    }
+
+    private static void installDeviceTabCleanup(ClassLoader loader) {
+        if (!HOST.equals(android.app.Application.getProcessName())) return;
+        Class<?> main = XposedHelpers.findClass("com.heytap.health.main.MainActivity", loader);
+        XC_MethodHook cleanup = new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam param) {
+                if (param.thisObject instanceof android.app.Activity activity) {
+                    scheduleDeviceTabCleanup(activity);
+                }
+            }
+        };
+        XposedBridge.hookAllMethods(main, "onCreate", cleanup);
+        XposedBridge.hookAllMethods(main, "onResume", cleanup);
+        HookRuntime.log("OHEALTH_DEVICE_TAB_CLEANUP_INSTALLED");
+    }
+
+    private static void scheduleDeviceTabCleanup(android.app.Activity activity) {
+        Handler handler = new Handler(Looper.getMainLooper());
+        for (long delay : new long[]{0L, 150L, 600L, 1_500L}) {
+            handler.postDelayed(() -> sanitizeDeviceTab(activity), delay);
+        }
+    }
+
+    private static void sanitizeDeviceTab(android.app.Activity activity) {
+        Bundle shown = display();
+        if (shown == null || activity == null || activity.isFinishing()
+                || activity.getWindow() == null) return;
+        View decor = activity.getWindow().getDecorView();
+        String name = shown.getString("name", "");
+        if (name.isBlank() || !containsText(decor, name)) return;
+        hideLabeledItem(decor, PANEL_HIDDEN_LABELS);
     }
 
     private static void installNotifyExtras(ClassLoader loader) {
@@ -1334,13 +1547,30 @@ public final class OHealthDeviceHook {
             String value = text.getText() == null ? "" : text.getText().toString().trim();
             if (labels.contains(value)) {
                 View item = recyclerItem(text);
-                if (item != null) item.setVisibility(View.GONE);
+                if (item != null && item.getVisibility() != View.GONE) {
+                    hideView(item);
+                    if (PANEL_HIDDEN_LOGGED.add("tree:" + value)) {
+                        HookRuntime.log("OHEALTH_DEVICE_ROW_HIDDEN label=" + value);
+                    }
+                }
             }
         }
         if (!(view instanceof ViewGroup group)) return;
         for (int index = 0; index < group.getChildCount(); index++) {
             hideLabeledItem(group.getChildAt(index), labels);
         }
+    }
+
+    private static void hideView(View item) {
+        if (item == null) return;
+        item.setVisibility(View.GONE);
+        item.setClickable(false);
+        item.setOnClickListener(null);
+        android.view.ViewGroup.LayoutParams params = item.getLayoutParams();
+        if (params == null) return;
+        params.height = 0;
+        params.width = 0;
+        item.setLayoutParams(params);
     }
 
     private static View recyclerItem(View child) {
