@@ -1424,7 +1424,7 @@ public final class OHealthDeviceHook {
         if (text.isEmpty()) return false;
         if (!mac.isBlank()
                 && io.github.miam1ku.mibandoplusbridge.data.MacIds.same(mac, text)) return true;
-        return (!deviceId.isBlank() && deviceId.equals(text)) || text.startsWith("miband11_");
+        return !deviceId.isBlank() && deviceId.equals(text);
     }
 
     private static boolean outsidePanelContent(android.app.Activity activity,
