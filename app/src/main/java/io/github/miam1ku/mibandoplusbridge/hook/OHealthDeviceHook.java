@@ -79,9 +79,9 @@ public final class OHealthDeviceHook {
                             HookRuntime.log("OHEALTH_CONTROLLER_REMEMBERED constructor");
                         }
                         Object created = param.thisObject;
-                        for (long delay : new long[]{250L, 1_200L}) {
+                        for (long delay : new long[]{0L, 250L, 1_200L}) {
                             main.postDelayed(() -> {
-                                if (created == null || display() == null) return;
+                                if (created == null) return;
                                 project(created, loader, null, true);
                                 HookRuntime.log("OHEALTH_DEVICE_ROWS_RESTORE controllers=1 source=constructor");
                             }, delay);
@@ -1072,6 +1072,8 @@ public final class OHealthDeviceHook {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 if (main.isInstance(param.thisObject)
                         && param.thisObject instanceof android.app.Activity activity) {
+                    restoreControllerRows(loader);
+                    scheduleInitialDevicePageSuppression(activity);
                     scheduleDeviceTabCleanup(activity);
                     scheduleDeviceRowsRestore(activity, loader);
                 }
@@ -1111,19 +1113,72 @@ public final class OHealthDeviceHook {
 
     private static void scheduleDeviceRowsRestore(android.app.Activity activity, ClassLoader loader) {
         Handler handler = new Handler(Looper.getMainLooper());
-        for (long delay : new long[]{150L, 900L, 1_800L, 3_500L}) {
+        for (long delay : new long[]{0L, 150L, 900L, 1_800L, 3_500L}) {
             handler.postDelayed(() -> {
                 if (activity == null || activity.isFinishing() || display() == null) return;
-                int count = 0;
-                for (Object controller : liveControllers()) {
-                    project(controller, loader, null, true);
-                    count++;
-                }
+                int count = restoreControllerRows(loader);
                 if (PANEL_HIDDEN_LOGGED.add("restore:" + delay)) {
                     HookRuntime.log("OHEALTH_DEVICE_ROWS_RESTORE controllers=" + count);
                 }
             }, delay);
         }
+    }
+
+    private static int restoreControllerRows(ClassLoader loader) {
+        int count = 0;
+        for (Object controller : liveControllers()) {
+            project(controller, loader, null, true);
+            count++;
+        }
+        return count;
+    }
+
+    private static void scheduleInitialDevicePageSuppression(android.app.Activity activity) {
+        Handler handler = new Handler(Looper.getMainLooper());
+        for (long delay : new long[]{0L, 16L, 50L, 120L, 250L, 600L}) {
+            handler.postDelayed(() -> suppressInitialDevicePage(activity), delay);
+        }
+    }
+
+    private static void suppressInitialDevicePage(android.app.Activity activity) {
+        Bundle shown = display();
+        if (shown == null || activity == null || activity.isFinishing()
+                || activity.getWindow() == null) return;
+        View decor = activity.getWindow().getDecorView();
+        View label = findText(decor, Set.of("初次见面", "Meet your device"));
+        if (label == null) return;
+        View page = initialPageContainer(label, decor);
+        if (page == null || page == decor) return;
+        hideView(page);
+        if (PANEL_HIDDEN_LOGGED.add("initial-device-page")) {
+            HookRuntime.log("OHEALTH_INITIAL_DEVICE_PAGE_HELD");
+        }
+    }
+
+    private static View findText(View view, Set<String> values) {
+        if (view instanceof TextView text) {
+            String value = text.getText() == null ? "" : text.getText().toString().trim();
+            if (values.contains(value)) return text;
+        }
+        if (!(view instanceof ViewGroup group)) return null;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            View found = findText(group.getChildAt(index), values);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static View initialPageContainer(View label, View decor) {
+        int minimum = Math.max(400, decor.getHeight() / 5);
+        int maximum = Math.max(minimum + 1, decor.getHeight() * 9 / 10);
+        View current = label;
+        while (current.getParent() instanceof ViewGroup parent) {
+            if (parent == decor) break;
+            int height = parent.getHeight();
+            if (height >= minimum && height <= maximum) return parent;
+            current = parent;
+        }
+        return recyclerItem(label);
     }
 
     private static void sanitizeDeviceTab(android.app.Activity activity) {
