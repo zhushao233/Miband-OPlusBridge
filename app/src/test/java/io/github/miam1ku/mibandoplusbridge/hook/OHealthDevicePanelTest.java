@@ -23,4 +23,14 @@ public final class OHealthDevicePanelTest {
         assertFalse(OHealthDeviceHook.panelIdentityMatches(
                 "A4:C1:38:12:34:56", "miband11_x", "miband11_other"));
     }
+
+    @Test public void wearableLabelsHideOnlyUnsupportedRows() {
+        assertTrue(OHealthDeviceHook.isDeviceRowHiddenLabel("我的表盘"));
+        assertTrue(OHealthDeviceHook.isDeviceRowHiddenLabel("系统更新"));
+        assertTrue(OHealthDeviceHook.isDeviceRowHiddenLabel("闹钟"));
+        assertTrue(OHealthDeviceHook.isDeviceRowHiddenLabel("Alarm"));
+        assertFalse(OHealthDeviceHook.isDeviceRowHiddenLabel("通知"));
+        assertFalse(OHealthDeviceHook.isDeviceRowHiddenLabel("睡眠"));
+        assertTrue(OHealthDeviceHook.isDeviceRowHiddenLabel("我的表盘 "));
+    }
 }
