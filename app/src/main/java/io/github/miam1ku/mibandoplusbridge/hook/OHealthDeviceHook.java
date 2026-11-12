@@ -75,6 +75,9 @@ public final class OHealthDeviceHook {
                 XposedBridge.hookMethod(constructor, new XC_MethodHook() {
                     @Override protected void afterHookedMethod(MethodHookParam param) {
                         remember(param.thisObject);
+                        if (PANEL_HIDDEN_LOGGED.add("controller-constructor")) {
+                            HookRuntime.log("OHEALTH_CONTROLLER_REMEMBERED constructor");
+                        }
                     }
                 });
             } catch (Throwable ignored) {
@@ -84,6 +87,9 @@ public final class OHealthDeviceHook {
         XC_MethodHook refresh = new XC_MethodHook() {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {
                         remember(param.thisObject);
+                        if (PANEL_HIDDEN_LOGGED.add("controller-refresh")) {
+                            HookRuntime.log("OHEALTH_CONTROLLER_REMEMBERED refresh");
+                        }
                         int listArg = firstListArgument(param.args);
                         if (APPENDING.get() || listArg < 0 || !(param.args[listArg] instanceof List<?> current)) return;
                         APPENDING.set(true);
@@ -1055,15 +1061,36 @@ public final class OHealthDeviceHook {
         Class<?> main = XposedHelpers.findClass("com.heytap.health.main.MainActivity", loader);
         XC_MethodHook cleanup = new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
-                if (param.thisObject instanceof android.app.Activity activity) {
+                if (main.isInstance(param.thisObject)
+                        && param.thisObject instanceof android.app.Activity activity) {
                     scheduleDeviceTabCleanup(activity);
                     scheduleDeviceRowsRestore(activity, loader);
                 }
             }
         };
-        XposedBridge.hookAllMethods(main, "onCreate", cleanup);
-        XposedBridge.hookAllMethods(main, "onResume", cleanup);
-        HookRuntime.log("OHEALTH_DEVICE_TAB_CLEANUP_INSTALLED");
+        int hooks = 0;
+        hooks += hookInheritedLifecycle(main, "onCreate", cleanup);
+        hooks += hookInheritedLifecycle(main, "onResume", cleanup);
+        HookRuntime.log("OHEALTH_DEVICE_TAB_CLEANUP_INSTALLED hooks=" + hooks);
+    }
+
+    private static int hookInheritedLifecycle(Class<?> activity, String name, XC_MethodHook callback) {
+        for (Class<?> type = activity; type != null; type = type.getSuperclass()) {
+            for (Method method : type.getDeclaredMethods()) {
+                if (!method.getName().equals(name) || method.isBridge() || method.isSynthetic()
+                        || method.getParameterCount() != 0) continue;
+                try {
+                    XposedBridge.hookMethod(method, callback);
+                    return 1;
+                } catch (Throwable unavailable) {
+                    HookRuntime.log("OHEALTH_DEVICE_LIFECYCLE_HOOK_FAILED "
+                            + name + " " + unavailable.getClass().getSimpleName());
+                    return 0;
+                }
+            }
+        }
+        HookRuntime.log("OHEALTH_DEVICE_LIFECYCLE_MISSING " + name);
+        return 0;
     }
 
     private static void scheduleDeviceTabCleanup(android.app.Activity activity) {
@@ -1083,7 +1110,7 @@ public final class OHealthDeviceHook {
                     project(controller, loader, null, true);
                     count++;
                 }
-                if (count > 0 && PANEL_HIDDEN_LOGGED.add("restore:" + delay)) {
+                if (PANEL_HIDDEN_LOGGED.add("restore:" + delay)) {
                     HookRuntime.log("OHEALTH_DEVICE_ROWS_RESTORE controllers=" + count);
                 }
             }, delay);
