@@ -45,6 +45,9 @@ public final class OHealthDeviceHook {
             "闹钟", "Alarm", "Alarms", "Alarm clock");
     private static final Set<String> PANEL_HIDDEN_LOGGED =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final Set<android.app.Activity> PRE_DRAW_HELD =
+            java.util.Collections.newSetFromMap(new WeakHashMap<>());
+    private static volatile WeakReference<android.app.Activity> MAIN_ACTIVITY = new WeakReference<>(null);
 
     private static volatile Bundle snapshot;
     private static volatile String remembered;
@@ -891,6 +894,7 @@ public final class OHealthDeviceHook {
             if (activity != null) openNativeHistory(className, activity, loader);
         }
         installWearableRowFilter(loader, items);
+        installWatchFaceCardFilter(loader);
         installHostNotifications(loader);
         installNotifyExtras(loader);
     }
@@ -988,6 +992,97 @@ public final class OHealthDeviceHook {
         HookRuntime.log("OHEALTH_WEARABLE_ROW_HOOKS " + hooked + " classes=" + itemNames.size());
     }
 
+    /**
+     * The upstream build hid DeviceWatchFaceItem by name. That class is gone in 6.10.15, while
+     * WatchFaceAdapter still exists and is constructed with this band's UserDeviceInfo.
+     */
+    private static void installWatchFaceCardFilter(ClassLoader loader) {
+        try {
+            Class<?> adapter = XposedHelpers.findClass(
+                    "com.heytap.health.device.tab.watchface.WatchFaceAdapter", loader);
+            XC_MethodHook cleanup = new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    if (watchFaceAdapterIsBand(param.thisObject)) scheduleWatchFaceCardCleanup();
+                }
+            };
+            for (java.lang.reflect.Constructor<?> constructor : adapter.getDeclaredConstructors()) {
+                XposedBridge.hookMethod(constructor, cleanup);
+            }
+            XposedBridge.hookAllMethods(adapter, "onCreateViewHolder", cleanup);
+            XposedBridge.hookAllMethods(adapter, "onBindViewHolder", cleanup);
+            XposedBridge.hookAllMethods(adapter, "getItemCount", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (watchFaceAdapterIsBand(param.thisObject)) param.setResult(0);
+                }
+            });
+            HookRuntime.log("OHEALTH_WATCH_FACE_ADAPTER_INSTALLED");
+        } catch (Throwable unavailable) {
+            HookRuntime.log("OHEALTH_WATCH_FACE_ADAPTER_UNAVAILABLE "
+                    + unavailable.getClass().getSimpleName());
+        }
+    }
+
+    private static boolean watchFaceAdapterIsBand(Object adapter) {
+        Object info = fieldValue(adapter, "n");
+        if (info == null) return false;
+        try {
+            return ourMac(XposedHelpers.callMethod(info, "getMac"));
+        } catch (Throwable unavailable) {
+            return false;
+        }
+    }
+
+    private static void scheduleWatchFaceCardCleanup() {
+        Handler handler = new Handler(Looper.getMainLooper());
+        for (long delay : new long[]{0L, 50L, 200L, 600L}) {
+            handler.postDelayed(OHealthDeviceHook::suppressWatchFaceCards, delay);
+        }
+    }
+
+    private static void suppressWatchFaceCards() {
+        android.app.Activity activity = MAIN_ACTIVITY.get();
+        if (activity == null || activity.isFinishing() || activity.getWindow() == null) return;
+        View decor = activity.getWindow().getDecorView();
+        int hidden = 0;
+        for (RecyclerView recycler : findRecyclerViews(decor)) {
+            if (!(recycler.getAdapter() instanceof RecyclerView.Adapter<?> adapter)) continue;
+            if (!adapter.getClass().getName().contains("device.tab.watchface.WatchFaceAdapter")) continue;
+            if (!watchFaceAdapterIsBand(adapter)) continue;
+            hideView(watchFaceCardContainer(recycler, decor));
+            hidden++;
+        }
+        if (hidden > 0 && PANEL_HIDDEN_LOGGED.add("watch-face-adapter")) {
+            HookRuntime.log("OHEALTH_WATCH_FACE_CARD_HIDDEN count=" + hidden);
+        }
+    }
+
+    private static ArrayList<RecyclerView> findRecyclerViews(View view) {
+        ArrayList<RecyclerView> found = new ArrayList<>();
+        collectRecyclerViews(view, found);
+        return found;
+    }
+
+    private static void collectRecyclerViews(View view, List<RecyclerView> found) {
+        if (view instanceof RecyclerView recycler) found.add(recycler);
+        if (!(view instanceof ViewGroup group)) return;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            collectRecyclerViews(group.getChildAt(index), found);
+        }
+    }
+
+    private static View watchFaceCardContainer(View recycler, View decor) {
+        int minimum = Math.max(250, decor.getHeight() / 8);
+        int maximum = Math.max(minimum + 1, decor.getHeight() * 7 / 10);
+        View current = recycler;
+        while (current.getParent() instanceof ViewGroup parent) {
+            if (parent == decor) break;
+            int height = parent.getHeight();
+            if (height >= minimum && height <= maximum) return parent;
+            current = parent;
+        }
+        return recycler;
+    }
+
     private static View wearableItemView(Object item) {
         Object view = fieldValue(item, "t");
         if (view instanceof View row) return row;
@@ -1072,7 +1167,9 @@ public final class OHealthDeviceHook {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 if (main.isInstance(param.thisObject)
                         && param.thisObject instanceof android.app.Activity activity) {
+                    MAIN_ACTIVITY = new WeakReference<>(activity);
                     restoreControllerRows(loader);
+                    installInitialPagePreDrawHold(activity);
                     scheduleInitialDevicePageSuppression(activity);
                     scheduleDeviceTabCleanup(activity);
                     scheduleDeviceRowsRestore(activity, loader);
@@ -1131,6 +1228,53 @@ public final class OHealthDeviceHook {
             count++;
         }
         return count;
+    }
+
+    /**
+     * The empty-device page can be laid out before the controller exists. Cancel its first draw
+     * after hiding that card, then let the next frame show the restored device list.
+     */
+    private static void installInitialPagePreDrawHold(android.app.Activity activity) {
+        if (!PRE_DRAW_HELD.add(activity) || activity.getWindow() == null) return;
+        View decor = activity.getWindow().getDecorView();
+        boolean[] held = {false};
+        android.view.ViewTreeObserver.OnPreDrawListener listener =
+                new android.view.ViewTreeObserver.OnPreDrawListener() {
+                    @Override public boolean onPreDraw() {
+                        Bundle shown = display();
+                        if (shown == null || activity.isFinishing()) {
+                            removePreDraw(activity, decor, this);
+                            return true;
+                        }
+                        String name = shown.getString("name", "");
+                        View empty = findText(decor, Set.of("初次见面", "Meet your device"));
+                        if (empty != null) {
+                            View page = initialPageContainer(empty, decor);
+                            if (page != null && page != decor) hideView(page);
+                            if (!held[0]) {
+                                held[0] = true;
+                                HookRuntime.log("OHEALTH_INITIAL_PAGE_PREDRAW_HELD");
+                                return false;
+                            }
+                        }
+                        if (!name.isBlank() && containsText(decor, name)) {
+                            removePreDraw(activity, decor, this);
+                        }
+                        return true;
+                    }
+                };
+        decor.getViewTreeObserver().addOnPreDrawListener(listener);
+        decor.postDelayed(() -> removePreDraw(activity, decor, listener), 8_000L);
+    }
+
+    private static void removePreDraw(android.app.Activity activity, View decor,
+            android.view.ViewTreeObserver.OnPreDrawListener listener) {
+        PRE_DRAW_HELD.remove(activity);
+        try {
+            if (decor.getViewTreeObserver().isAlive()) {
+                decor.getViewTreeObserver().removeOnPreDrawListener(listener);
+            }
+        } catch (Throwable ignored) { }
     }
 
     private static void scheduleInitialDevicePageSuppression(android.app.Activity activity) {
