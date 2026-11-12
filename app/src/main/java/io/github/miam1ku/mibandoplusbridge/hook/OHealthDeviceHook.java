@@ -78,6 +78,14 @@ public final class OHealthDeviceHook {
                         if (PANEL_HIDDEN_LOGGED.add("controller-constructor")) {
                             HookRuntime.log("OHEALTH_CONTROLLER_REMEMBERED constructor");
                         }
+                        Object created = param.thisObject;
+                        for (long delay : new long[]{250L, 1_200L}) {
+                            main.postDelayed(() -> {
+                                if (created == null || display() == null) return;
+                                project(created, loader, null, true);
+                                HookRuntime.log("OHEALTH_DEVICE_ROWS_RESTORE controllers=1 source=constructor");
+                            }, delay);
+                        }
                     }
                 });
             } catch (Throwable ignored) {
@@ -652,6 +660,7 @@ public final class OHealthDeviceHook {
         REFRESHING.set(true);
         try {
             Bundle shown = snapshot;
+            if (shown == null) shown = liveSnapshot();
             if (shown == null) return;
             if (previous != null && !sameIdentity(previous, shown)) removeListed(controller, previous);
             if (!shown.getBoolean("registered", false)) {
@@ -1102,7 +1111,7 @@ public final class OHealthDeviceHook {
 
     private static void scheduleDeviceRowsRestore(android.app.Activity activity, ClassLoader loader) {
         Handler handler = new Handler(Looper.getMainLooper());
-        for (long delay : new long[]{150L, 900L}) {
+        for (long delay : new long[]{150L, 900L, 1_800L, 3_500L}) {
             handler.postDelayed(() -> {
                 if (activity == null || activity.isFinishing() || display() == null) return;
                 int count = 0;
