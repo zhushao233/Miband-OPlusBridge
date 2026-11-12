@@ -38,6 +38,10 @@ public final class OHealthDeviceHook {
     private static final String INFO = "com.heytap.health.devicemanager.processor.bean.UserDeviceInfo";
     private static final String WEARABLE = "com.heytap.health.device.tab.bean.WearableDevice";
     private static final String CONSTANTS = "com.heytap.health.device_manager_base.DeviceConstants";
+    private static final long PANEL_FINISH_GUARD_MS = 15_000L;
+    private static final Set<String> PANEL_HIDDEN_LABELS = Set.of(
+            "我的表盘", "My faces", "My watch faces",
+            "系统更新", "System update", "Software update");
 
     private static volatile Bundle snapshot;
     private static volatile String remembered;
@@ -1035,32 +1039,85 @@ public final class OHealthDeviceHook {
                     "com.heytap.health.linkage.ui.DeviceDetailsPanelActivity", loader);
             XposedBridge.hookAllMethods(panel, "u6", new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
-                    if (!(param.thisObject instanceof android.app.Activity activity)) return;
-                    if (!panelIsBand(activity) || param.args.length == 0
-                            || !(param.args[0] instanceof List<?> original)) return;
-                    ArrayList<Object> filtered = new ArrayList<>(original.size());
-                    int[] hidden = panelHiddenResources(activity);
-                    for (Object item : original) {
-                        if (item == null || !hasResource(item, hidden)) filtered.add(item);
+                    try {
+                        if (!(param.thisObject instanceof android.app.Activity activity)) return;
+                        if (!panelIsBand(activity) || param.args.length == 0
+                                || !(param.args[0] instanceof List<?> original)) return;
+                        ArrayList<Object> filtered = new ArrayList<>(original.size());
+                        int[] hidden = panelHiddenResources(activity);
+                        for (Object item : original) {
+                            if (item == null || !hasResource(item, hidden)) filtered.add(item);
+                        }
+                        if (filtered.size() != original.size() && keepsPanelGroups(original, filtered)) {
+                            param.args[0] = filtered;
+                            HookRuntime.log("OHEALTH_PANEL_ROWS_FILTERED "
+                                    + (original.size() - filtered.size())
+                                    + " kept=" + filtered.size());
+                        } else if (filtered.size() != original.size()) {
+                            // u6 requires at least one item in every section. Keep an otherwise-empty
+                            // section alive for construction; sanitizePanel hides its rendered row.
+                            HookRuntime.log("OHEALTH_PANEL_ROWS_SECTION_KEPT "
+                                    + (original.size() - filtered.size()));
+                        } else {
+                            HookRuntime.log("OHEALTH_PANEL_ROWS_FILTER_NONE count="
+                                    + original.size());
+                        }
+                    } catch (Throwable failure) {
+                        HookRuntime.log("OHEALTH_PANEL_ROWS_FILTER_FAILED "
+                                + failure.getClass().getSimpleName());
                     }
-                    if (filtered.size() != original.size()) {
-                        param.args[0] = filtered;
-                        HookRuntime.log("OHEALTH_PANEL_ROWS_FILTERED "
-                                + (original.size() - filtered.size()));
+                }
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    if (param.thisObject instanceof android.app.Activity activity
+                            && panelIsBand(activity)) {
+                        schedulePanelCleanup(activity);
                     }
                 }
             });
             XposedBridge.hookAllMethods(panel, "onCreate", new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     if (!(param.thisObject instanceof android.app.Activity activity)) return;
+                    if (!panelIsBand(activity)) return;
                     PANEL_OPENED.put(activity, SystemClock.elapsedRealtime());
                     schedulePanelCleanup(activity);
                 }
             });
             XposedBridge.hookAllMethods(panel, "onResume", new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
-                    if (param.thisObject instanceof android.app.Activity activity) {
-                        schedulePanelCleanup(activity);
+                    if (!(param.thisObject instanceof android.app.Activity activity)
+                            || !panelIsBand(activity)) return;
+                    // Returning from a child page is also a fresh visible window. An asynchronous
+                    // host teardown immediately after that return must not reopen the device home.
+                    PANEL_OPENED.put(activity, SystemClock.elapsedRealtime());
+                    PANEL_USER_EXIT.remove(activity);
+                    schedulePanelCleanup(activity);
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "onBackPressed", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.thisObject instanceof android.app.Activity activity
+                            && panelIsBand(activity)) {
+                        PANEL_USER_EXIT.add(activity);
+                    }
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "onUserLeaveHint", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.thisObject instanceof android.app.Activity activity
+                            && panelIsBand(activity)) {
+                        PANEL_USER_EXIT.add(activity);
+                    }
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "onTouchEvent", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!(param.thisObject instanceof android.app.Activity activity)
+                            || param.args.length == 0
+                            || !(param.args[0] instanceof android.view.MotionEvent event)
+                            || !panelIsBand(activity)) return;
+                    if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN
+                            && outsidePanelContent(activity, event)) {
+                        PANEL_USER_EXIT.add(activity);
                     }
                 }
             });
@@ -1070,7 +1127,8 @@ public final class OHealthDeviceHook {
                     if (!(activity instanceof android.app.Activity)) return;
                     if (PANEL_USER_EXIT.contains(activity) || !panelIsBand(activity)) return;
                     Long opened = PANEL_OPENED.get(activity);
-                    if (opened != null && SystemClock.elapsedRealtime() - opened < 15_000L) {
+                    if (opened != null
+                            && SystemClock.elapsedRealtime() - opened < PANEL_FINISH_GUARD_MS) {
                         param.setResult(null);
                         HookRuntime.log("OHEALTH_PANEL_EARLY_FINISH_HELD");
                     }
@@ -1207,6 +1265,15 @@ public final class OHealthDeviceHook {
     private static boolean hasResource(Object item, int[] resourceIds) {
         for (Class<?> type = item.getClass(); type != null; type = type.getSuperclass()) {
             for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                if (field.getType() == String.class) {
+                    try {
+                        field.setAccessible(true);
+                        Object value = field.get(item);
+                        if (value instanceof String text
+                                && PANEL_HIDDEN_LABELS.contains(text.trim())) return true;
+                    } catch (Throwable ignored) { }
+                    continue;
+                }
                 if (field.getType() != int.class) continue;
                 try {
                     field.setAccessible(true);
@@ -1216,6 +1283,36 @@ public final class OHealthDeviceHook {
             }
         }
         return false;
+    }
+
+    /** u6 indexes sections 1..4 and calls first() on each one. Do not leave a section empty. */
+    private static boolean keepsPanelGroups(List<?> original, List<?> filtered) {
+        ArrayList<Integer> groups = new ArrayList<>();
+        for (Object item : original) {
+            int group = panelGroup(item);
+            if (group == Integer.MIN_VALUE || groups.contains(group)) continue;
+            groups.add(group);
+        }
+        for (Integer group : groups) {
+            boolean found = false;
+            for (Object item : filtered) {
+                if (panelGroup(item) == group) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    private static int panelGroup(Object item) {
+        if (item == null) return Integer.MIN_VALUE;
+        try {
+            return XposedHelpers.getIntField(item, "a");
+        } catch (Throwable unavailable) {
+            return Integer.MIN_VALUE;
+        }
     }
 
     private static void schedulePanelCleanup(android.app.Activity activity) {
@@ -1229,8 +1326,7 @@ public final class OHealthDeviceHook {
         if (activity == null || activity.isFinishing() || !panelIsBand(activity)) return;
         View decor = activity.getWindow() == null ? null : activity.getWindow().getDecorView();
         if (decor == null) return;
-        hideLabeledItem(decor, Set.of("我的表盘", "My faces", "My watch faces"));
-        hideLabeledItem(decor, Set.of("系统更新", "System update"));
+        hideLabeledItem(decor, PANEL_HIDDEN_LABELS);
     }
 
     private static void hideLabeledItem(View view, Set<String> labels) {
@@ -1287,12 +1383,58 @@ public final class OHealthDeviceHook {
     }
 
     private static boolean panelIsBand(Object panel) {
-        try {
-            return ourBand(XposedHelpers.getObjectField(panel, "mMac"),
-                    XposedHelpers.getObjectField(panel, "mDeviceId"));
-        } catch (Throwable ignored) {
-            return false;
+        Bundle shown = display();
+        if (panel == null || shown == null) return false;
+        String mac = shown.getString("mac", "");
+        String deviceId = shown.getString("deviceId", "");
+        for (String name : new String[]{"mMac", "mDeviceId", "t", "l"}) {
+            if (panelIdentityMatches(mac, deviceId, fieldValue(panel, name))) return true;
         }
+        if (panel instanceof android.app.Activity activity && activity.getIntent() != null) {
+            for (String name : new String[]{"device_mac_info", "device_id"}) {
+                if (panelIdentityMatches(mac, deviceId,
+                        activity.getIntent().getStringExtra(name))) return true;
+            }
+        }
+        // 6.10.15 exposes these fields only on the obfuscated parent. Keep a reflection fallback
+        // so the next host rename does not silently disable every device-panel hook again.
+        for (Class<?> type = panel.getClass(); type != null; type = type.getSuperclass()) {
+            for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                if (field.getType() != String.class) continue;
+                try {
+                    field.setAccessible(true);
+                    if (panelIdentityMatches(mac, deviceId, field.get(panel))) return true;
+                } catch (Throwable ignored) { }
+            }
+        }
+        return false;
+    }
+
+    private static Object fieldValue(Object target, String name) {
+        try {
+            return XposedHelpers.getObjectField(target, name);
+        } catch (Throwable unavailable) {
+            return null;
+        }
+    }
+
+    static boolean panelIdentityMatches(String mac, String deviceId, Object candidate) {
+        if (!(candidate instanceof CharSequence value)) return false;
+        String text = value.toString().trim();
+        if (text.isEmpty()) return false;
+        if (!mac.isBlank()
+                && io.github.miam1ku.mibandoplusbridge.data.MacIds.same(mac, text)) return true;
+        return (!deviceId.isBlank() && deviceId.equals(text)) || text.startsWith("miband11_");
+    }
+
+    private static boolean outsidePanelContent(android.app.Activity activity,
+            android.view.MotionEvent event) {
+        Object raw = fieldValue(activity, "H");
+        if (!(raw instanceof View panel)) return false;
+        int[] location = new int[2];
+        panel.getLocationOnScreen(location);
+        float y = event.getRawY();
+        return y < location[1] || y >= location[1] + panel.getHeight();
     }
 
     private static boolean openHealthApp(android.app.Activity activity) {
