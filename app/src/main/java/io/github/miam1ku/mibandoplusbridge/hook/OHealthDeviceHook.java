@@ -9,7 +9,12 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.service.notification.StatusBarNotification;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.TextView;
+import androidx.recyclerview.widget.RecyclerView;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -24,6 +29,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /** Projects the registered Xiaomi device into OHealth without modifying other device identities. */
 public final class OHealthDeviceHook {
@@ -44,6 +50,9 @@ public final class OHealthDeviceHook {
     private static final List<WeakReference<Object>> CONTROLLERS = new ArrayList<>();
     private static final ThreadLocal<Boolean> APPENDING = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<Boolean> REFRESHING = ThreadLocal.withInitial(() -> false);
+    private static final Map<Object, Long> PANEL_OPENED = new WeakHashMap<>();
+    private static final Set<Object> PANEL_USER_EXIT =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
 
     private OHealthDeviceHook() {}
     private static Context hostContext;
@@ -1022,6 +1031,62 @@ public final class OHealthDeviceHook {
      */
     private static void installNativePanel(ClassLoader loader) {
         try {
+            Class<?> panel = XposedHelpers.findClass(
+                    "com.heytap.health.linkage.ui.DeviceDetailsPanelActivity", loader);
+            XposedBridge.hookAllMethods(panel, "u6", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!(param.thisObject instanceof android.app.Activity activity)) return;
+                    if (!panelIsBand(activity) || param.args.length == 0
+                            || !(param.args[0] instanceof List<?> original)) return;
+                    ArrayList<Object> filtered = new ArrayList<>(original.size());
+                    int[] hidden = panelHiddenResources(activity);
+                    for (Object item : original) {
+                        if (item == null || !hasResource(item, hidden)) filtered.add(item);
+                    }
+                    if (filtered.size() != original.size()) {
+                        param.args[0] = filtered;
+                        HookRuntime.log("OHEALTH_PANEL_ROWS_FILTERED "
+                                + (original.size() - filtered.size()));
+                    }
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "onCreate", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    if (!(param.thisObject instanceof android.app.Activity activity)) return;
+                    PANEL_OPENED.put(activity, SystemClock.elapsedRealtime());
+                    schedulePanelCleanup(activity);
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "onResume", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    if (param.thisObject instanceof android.app.Activity activity) {
+                        schedulePanelCleanup(activity);
+                    }
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "finish", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    Object activity = param.thisObject;
+                    if (!(activity instanceof android.app.Activity)) return;
+                    if (PANEL_USER_EXIT.contains(activity) || !panelIsBand(activity)) return;
+                    Long opened = PANEL_OPENED.get(activity);
+                    if (opened != null && SystemClock.elapsedRealtime() - opened < 15_000L) {
+                        param.setResult(null);
+                        HookRuntime.log("OHEALTH_PANEL_EARLY_FINISH_HELD");
+                    }
+                }
+            });
+            XposedBridge.hookAllMethods(panel, "onDestroy", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    PANEL_OPENED.remove(param.thisObject);
+                    PANEL_USER_EXIT.remove(param.thisObject);
+                }
+            });
+        } catch (Throwable unavailable) {
+            HookRuntime.log("OHEALTH_PANEL_LIFECYCLE_UNAVAILABLE "
+                    + unavailable.getClass().getSimpleName());
+        }
+        try {
             XposedHelpers.findAndHookMethod(
                     "com.heytap.health.linkage.ui.DeviceDetailsPanelActivity", loader,
                     "showNewFunctionItem", new XC_MethodHook() {
@@ -1123,6 +1188,84 @@ public final class OHealthDeviceHook {
         guardDuplicateSpaceCard(loader);
     }
 
+    private static int[] panelHiddenResources(android.content.Context context) {
+        String[] names = {
+                "band_face_maxcount_title",
+                "band_face_my_watch_faces",
+                "band_face_my_watch_faces2",
+                "band_face_online",
+                "watch_face_center_tab_store",
+                "device_ota_settings_update_software"
+        };
+        int[] ids = new int[names.length];
+        for (int index = 0; index < names.length; index++) {
+            ids[index] = context.getResources().getIdentifier(names[index], "string", HOST);
+        }
+        return ids;
+    }
+
+    private static boolean hasResource(Object item, int[] resourceIds) {
+        for (Class<?> type = item.getClass(); type != null; type = type.getSuperclass()) {
+            for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                if (field.getType() != int.class) continue;
+                try {
+                    field.setAccessible(true);
+                    int value = field.getInt(item);
+                    for (int id : resourceIds) if (id != 0 && value == id) return true;
+                } catch (Throwable ignored) { }
+            }
+        }
+        return false;
+    }
+
+    private static void schedulePanelCleanup(android.app.Activity activity) {
+        Handler handler = new Handler(Looper.getMainLooper());
+        for (long delay : new long[]{0L, 150L, 600L, 1_500L}) {
+            handler.postDelayed(() -> sanitizePanel(activity), delay);
+        }
+    }
+
+    private static void sanitizePanel(android.app.Activity activity) {
+        if (activity == null || activity.isFinishing() || !panelIsBand(activity)) return;
+        View decor = activity.getWindow() == null ? null : activity.getWindow().getDecorView();
+        if (decor == null) return;
+        hideLabeledItem(decor, Set.of("我的表盘", "My faces", "My watch faces"));
+        hideLabeledItem(decor, Set.of("系统更新", "System update"));
+    }
+
+    private static void hideLabeledItem(View view, Set<String> labels) {
+        if (view instanceof TextView text) {
+            String value = text.getText() == null ? "" : text.getText().toString().trim();
+            if (labels.contains(value)) {
+                View item = recyclerItem(text);
+                if (item != null) item.setVisibility(View.GONE);
+            }
+        }
+        if (!(view instanceof ViewGroup group)) return;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            hideLabeledItem(group.getChildAt(index), labels);
+        }
+    }
+
+    private static View recyclerItem(View child) {
+        View current = child;
+        while (current != null) {
+            if (current.getParent() instanceof RecyclerView) return current;
+            if (!(current.getParent() instanceof ViewGroup parent)) return null;
+            if (parent.isClickable() && labelsRow(parent, current)) return parent;
+            current = parent;
+        }
+        return null;
+    }
+
+    private static boolean labelsRow(ViewGroup parent, View title) {
+        int textViews = 0;
+        for (int index = 0; index < parent.getChildCount(); index++) {
+            if (parent.getChildAt(index) instanceof TextView) textViews++;
+        }
+        return title instanceof TextView && textViews <= 3;
+    }
+
     private static Bundle liveSnapshot() {
         Bundle current = display();
         if (current != null) return current;
@@ -1164,6 +1307,7 @@ public final class OHealthDeviceHook {
             intent.putExtra("tab", "3");
             intent.putExtra("from_internal", false);
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PANEL_USER_EXIT.add(activity);
             activity.startActivity(intent);
             activity.finish();
             HookRuntime.log("OHEALTH_PANEL_OPEN_APP");
