@@ -70,6 +70,17 @@ public final class OHealthDeviceHook {
         if (!HOST.equals(context.getPackageName())) return;
         main = HookRuntime.main();
         Class<?> controller = XposedHelpers.findClass(CONTROLLER, loader);
+        for (java.lang.reflect.Constructor<?> constructor : controller.getDeclaredConstructors()) {
+            try {
+                XposedBridge.hookMethod(constructor, new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        remember(param.thisObject);
+                    }
+                });
+            } catch (Throwable ignored) {
+                // The refresh hook below also remembers controller instances.
+            }
+        }
         XC_MethodHook refresh = new XC_MethodHook() {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {
                         remember(param.thisObject);
@@ -767,7 +778,14 @@ public final class OHealthDeviceHook {
     }
 
     private static Object keepListed(Object controller, ClassLoader loader, Bundle shown) throws Exception {
-        Object list = XposedHelpers.getObjectField(controller, "deviceList");
+        Object list;
+        try {
+            list = XposedHelpers.getObjectField(controller, "deviceList");
+        } catch (Throwable moved) {
+            // New controllers keep only vq wrappers in their LockSortTreeSet. K(resultList, ...)
+            // rebuilds that set, so return the projection and let invokeRefresh feed it back.
+            return deviceInfo(loader, shown);
+        }
         XposedHelpers.callMethod(list, "writeLock");
         try {
             for (Object device : (Iterable<?>) list) {
@@ -788,7 +806,12 @@ public final class OHealthDeviceHook {
     }
 
     private static void removeListed(Object controller, Bundle identity) {
-        Object list = XposedHelpers.getObjectField(controller, "deviceList");
+        Object list;
+        try {
+            list = XposedHelpers.getObjectField(controller, "deviceList");
+        } catch (Throwable moved) {
+            return;
+        }
         String mac = null;
         XposedHelpers.callMethod(list, "readLock");
         try {
@@ -1034,6 +1057,7 @@ public final class OHealthDeviceHook {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 if (param.thisObject instanceof android.app.Activity activity) {
                     scheduleDeviceTabCleanup(activity);
+                    scheduleDeviceRowsRestore(activity, loader);
                 }
             }
         };
@@ -1046,6 +1070,23 @@ public final class OHealthDeviceHook {
         Handler handler = new Handler(Looper.getMainLooper());
         for (long delay : new long[]{0L, 150L, 600L, 1_500L}) {
             handler.postDelayed(() -> sanitizeDeviceTab(activity), delay);
+        }
+    }
+
+    private static void scheduleDeviceRowsRestore(android.app.Activity activity, ClassLoader loader) {
+        Handler handler = new Handler(Looper.getMainLooper());
+        for (long delay : new long[]{150L, 900L}) {
+            handler.postDelayed(() -> {
+                if (activity == null || activity.isFinishing() || display() == null) return;
+                int count = 0;
+                for (Object controller : liveControllers()) {
+                    project(controller, loader, null, true);
+                    count++;
+                }
+                if (count > 0 && PANEL_HIDDEN_LOGGED.add("restore:" + delay)) {
+                    HookRuntime.log("OHEALTH_DEVICE_ROWS_RESTORE controllers=" + count);
+                }
+            }, delay);
         }
     }
 
