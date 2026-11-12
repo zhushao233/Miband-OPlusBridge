@@ -13,7 +13,6 @@ public final class OHealthDevicePanelTest {
         assertTrue(OHealthDeviceHook.panelIdentityMatches(mac, "miband11_x",
                 "a4c138123456"));
         assertTrue(OHealthDeviceHook.panelIdentityMatches(mac, "miband11_x", "miband11_x"));
-        assertTrue(OHealthDeviceHook.panelIdentityMatches(mac, "", "miband11_other"));
     }
 
     @Test public void panelDoesNotConfuseAnotherDeviceNameOrModelWithItsIdentity() {
@@ -21,5 +20,7 @@ public final class OHealthDevicePanelTest {
                 "A4:C1:38:12:34:56", "miband11_x", "Xiaomi Smart Band 10"));
         assertFalse(OHealthDeviceHook.panelIdentityMatches(
                 "A4:C1:38:12:34:56", "miband11_x", "OB19B1"));
+        assertFalse(OHealthDeviceHook.panelIdentityMatches(
+                "A4:C1:38:12:34:56", "miband11_x", "miband11_other"));
     }
 }
