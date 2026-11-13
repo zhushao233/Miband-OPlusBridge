@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.Log;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
@@ -19,9 +18,9 @@ import java.util.concurrent.Executors;
 public final class DiagnosticActivity extends AppCompatActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private TextView status;
-    private Button start;
-    private Button live;
-    private Button permission;
+    private BridgeScreen.ActionRow start;
+    private BridgeScreen.ActionRow live;
+    private BridgeScreen.ActionRow permission;
     private volatile SppDiagnosticClient client;
     private boolean running;
 
