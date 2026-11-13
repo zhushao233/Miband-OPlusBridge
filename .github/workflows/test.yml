@@ -59,43 +59,21 @@ jobs:
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0"
-      - name: Restore stable CI debug signing
-        uses: actions/cache@v4
-        with:
-          path: .github-ci-signing
-          key: oplusbridge-ci-debug-signing-v1
       - name: Prepare signing
         run: |
           set -euo pipefail
-          if [[ -n "${PROJECT_KEYSTORE_BASE64:-}" ]]; then
-            printf '%s' "$PROJECT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/project-signing.jks"
-            echo "OPLUSBAND_KEYSTORE=$RUNNER_TEMP/project-signing.jks" >> "$GITHUB_ENV"
-            echo "OPLUSBAND_STORE_PASSWORD=$PROJECT_STORE_PASSWORD" >> "$GITHUB_ENV"
-            echo "OPLUSBAND_KEY_ALIAS=$PROJECT_KEY_ALIAS" >> "$GITHUB_ENV"
-            echo "OPLUSBAND_KEY_PASSWORD=$PROJECT_KEY_PASSWORD" >> "$GITHUB_ENV"
-            echo "SIGNING_SOURCE=repository-secrets" >> "$GITHUB_ENV"
-          else
-            mkdir -p .github-ci-signing
-            PASSWORD="OplusBridgeCiDebug-2026"
-            KEYSTORE="$GITHUB_WORKSPACE/.github-ci-signing/ci-debug.jks"
-            if [[ ! -s "$KEYSTORE" ]]; then
-              keytool -genkeypair \
-                -keystore "$KEYSTORE" \
-                -storepass "$PASSWORD" \
-                -keypass "$PASSWORD" \
-                -alias ci-debug \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 3650 \
-                -dname CN=CiDebug \
-                -noprompt
-            fi
-            echo "OPLUSBAND_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
-            echo "OPLUSBAND_STORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
-            echo "OPLUSBAND_KEY_ALIAS=ci-debug" >> "$GITHUB_ENV"
-            echo "OPLUSBAND_KEY_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
-            echo "SIGNING_SOURCE=stable-ci-cache" >> "$GITHUB_ENV"
+          if [[ -z "${PROJECT_KEYSTORE_BASE64:-}" || -z "${PROJECT_STORE_PASSWORD:-}" \
+                || -z "${PROJECT_KEY_ALIAS:-}" || -z "${PROJECT_KEY_PASSWORD:-}" ]]; then
+            echo "::error::Signing secrets are missing. Configure OPLUSBAND_KEYSTORE_BASE64, OPLUSBAND_STORE_PASSWORD, OPLUSBAND_KEY_ALIAS, and OPLUSBAND_KEY_PASSWORD."
+            exit 1
           fi
+          printf '%s' "$PROJECT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/project-signing.jks"
+          test -s "$RUNNER_TEMP/project-signing.jks"
+          echo "OPLUSBAND_KEYSTORE=$RUNNER_TEMP/project-signing.jks" >> "$GITHUB_ENV"
+          echo "OPLUSBAND_STORE_PASSWORD=$PROJECT_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "OPLUSBAND_KEY_ALIAS=$PROJECT_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "OPLUSBAND_KEY_PASSWORD=$PROJECT_KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "SIGNING_SOURCE=repository-secrets" >> "$GITHUB_ENV"
       - name: Build debug APK
         run: |
           echo "APK signing source: $SIGNING_SOURCE"
