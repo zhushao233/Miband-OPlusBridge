@@ -8,12 +8,14 @@ import static org.junit.Assert.*;
 public final class HostVersionNoticeTest {
     @Test public void verifiedBuildsStayQuiet() {
         var installed = List.of(
-                app(HostIdentity.HEALTH_PACKAGE, "6.9.37", 6_093_700L),
+                app(HostIdentity.HEALTH_PACKAGE, "6.10.15_9e2a81e_261107", 6_101_500L),
                 app(HostIdentity.DEVICES_PACKAGE, "17.25.0", 1_725_000L),
                 app(HostIdentity.MI_PACKAGE, "3.59.1", 359_001L));
         assertEquals("", HostVersionNotice.fingerprint(installed));
         assertTrue(HostVersionNotice.accepted(HostIdentity.HEALTH_PACKAGE, "6.1.18_9fe4116_260429", 6_011_800L));
         assertTrue(HostVersionNotice.accepted(HostIdentity.HEALTH_PACKAGE, "6.9.40_f91e7bd_260930", 6_094_000L));
+        assertTrue(HostVersionNotice.accepted(HostIdentity.HEALTH_PACKAGE, "6.9.37", 6_093_700L));
+        assertTrue(HostVersionNotice.accepted(HostIdentity.HEALTH_PACKAGE, "6.10.15_9e2a81e_261107", 6_101_500L));
         assertTrue(HostVersionNotice.accepted(HostIdentity.DEVICES_PACKAGE, "17.4.10", 1_704_010L));
     }
 
