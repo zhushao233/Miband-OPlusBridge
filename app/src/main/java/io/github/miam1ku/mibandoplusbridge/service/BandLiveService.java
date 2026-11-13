@@ -45,14 +45,33 @@ public final class BandLiveService extends Service {
     private long nextBatteryAt;
     private long nextHealthAt;
     private long nextWeatherAt;
-    /** While idle, ask only for the battery and today's file list. Unchanged files and weather stay off the radio so the ACL can still sniff. */
+    /** Daytime idle cadence. Night history requests are deliberately much less frequent. */
     private static final long IDLE_POLL_MINUTES = 30;
+    private static final long NIGHT_POLL_MINUTES = 120;
+    private static final int NIGHT_START_HOUR = 22;
+    private static final int NIGHT_END_HOUR = 8;
+    private static final long QUIET_STEPS_MINUTES = 60;
+    private static final long QUIET_SAMPLE_MAX_AGE_MINUTES = 90;
+    private static final long QUIET_WAKE_STEPS = 30;
+    private static final long NIGHT_STATS_REFRESH_MINUTES = 60;
+    private static final int AWAKE_CONFIRM_SAMPLES = 2;
+    private static final int SLEEP_STATE_MISS_LIMIT = 2;
+    private static final long NIGHT_RESTART_COOLDOWN_MINUTES = 60;
+    private static final String LIVE_PREFS = "live-service";
+    private static final String LAST_NIGHT_FLUSH = "lastNightFlushAtMs";
+    private static final String WAKE_CATCHUP_DATE = "wakeCatchupDate";
     /**
      * The band reports the level itself and only pushes a change when its own counter moves, so
      * the phone copy is whatever the last request returned. The idle session is already up, and
      * one 4-byte request costs no extra link, so ask more often than the file list.
      */
     private static final long BATTERY_POLL_MINUTES = 10;
+    /**
+     * Sleep is tracked independently from the music feature. History file lists close the band's
+     * open sleep file, so that request must never run until the band is known to be awake.
+     */
+    private static final long SLEEP_STATE_POLL_MINUTES = 5;
+    private static final long INITIAL_HISTORY_SYNC_WAIT_SECONDS = 20;
     private static final long REALTIME_STATS_TIMEOUT_SECONDS = 30;
     /** 8/45 opens the band's live-stats stream. The band measures heart rate while that stream runs, so only the first snapshot is kept. */
     private static final int REALTIME_STATS_START = 45;
@@ -130,7 +149,32 @@ public final class BandLiveService extends Service {
             new io.github.miam1ku.mibandoplusbridge.notify.SleepMusic();
     private volatile boolean sleepPauseOn;
     private volatile long sleepArmedAtMs = Long.MAX_VALUE;
-    private long nextSleepFileAt;
+    private volatile Boolean bandAsleep;
+    private volatile boolean sleepStateUnsupported;
+    private int sleepStateMisses;
+    private volatile boolean waitingForInitialSleepState;
+    private volatile boolean historySyncPending;
+    private volatile boolean pendingHistoryIncludesHistory;
+    private volatile long historyCooldownUntilMs;
+    private long historyStateDeadlineAt;
+    private long nextSleepStateAt;
+    private long sessionStartAtMs;
+    private volatile long lastNightFlushAtMs;
+    private int awakeSamples;
+    private long nextNightStatsAt;
+    /*
+     * The quiet tracker is owned by the single coordinator thread. volatile keeps reads safe for
+     * diagnostics while all updates remain serialized with tick(), noteSleep(), and flush.
+     */
+    private volatile boolean nightWindowLast;
+    private volatile boolean nightHadQuiet;
+    private long quietStepsValue = Long.MIN_VALUE;
+    private long quietSinceMs;
+    private long quietCheckedAtMs;
+    private long quietBaselineSteps = -1;
+    private long quietSampleAtMs;
+    private volatile boolean quietSignalStale;
+    private volatile boolean nightQuietResult;
     private volatile boolean retryNow;
     /** SPP needs the system bond. This keeps the re-pair budget for one bond loss. */
     private final BondRecovery bondRecovery = new BondRecovery();
@@ -293,7 +337,7 @@ public final class BandLiveService extends Service {
         live.sleepMusic.reset();
         live.sleepArmedAtMs = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.armedAt(context);
         if (live.sleepPauseOn) {
-            live.nextSleepFileAt = System.nanoTime();
+            live.nextSleepStateAt = System.nanoTime();
             live.requestSleepState();
         }
     }
@@ -864,20 +908,59 @@ public final class BandLiveService extends Service {
                             weatherSync.releaseForecast(weatherEpoch);
                         }, healthReplay::hasCapacity);
                         long now = System.nanoTime();
+                        sessionStartAtMs = System.currentTimeMillis();
+                        loadSleepStateCapability(repository);
                         nextBatteryAt = now + TimeUnit.MINUTES.toNanos(BATTERY_POLL_MINUTES);
-                        nextHealthAt = now + TimeUnit.MINUTES.toNanos(IDLE_POLL_MINUTES);
-                        nextSleepFileAt = now + TimeUnit.MINUTES.toNanos(10);
+                        nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes());
                         nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
+                        bandAsleep = null;
+                        awakeSamples = 0;
+                        quietStepsValue = Long.MIN_VALUE;
+                        quietCheckedAtMs = 0;
+                        quietBaselineSteps = -1;
+                        quietSampleAtMs = 0;
+                        quietSignalStale = false;
+                        nightQuietResult = false;
+                        nightWindowLast = isNightWindow();
+                        nightHadQuiet = false;
+                        boolean night = nightWindowLast;
+                        boolean restartCooldown = night && lastNightFlushAtMs > 0
+                                && sessionStartAtMs >= lastNightFlushAtMs
+                                && sessionStartAtMs - lastNightFlushAtMs
+                                        < TimeUnit.MINUTES.toMillis(NIGHT_RESTART_COOLDOWN_MINUTES);
+                        historyCooldownUntilMs = restartCooldown
+                                ? sessionStartAtMs
+                                        + TimeUnit.MINUTES.toMillis(NIGHT_RESTART_COOLDOWN_MINUTES)
+                                : 0;
+                        historySyncPending = !restartCooldown;
+                        pendingHistoryIncludesHistory = !night;
+                        if (sleepStateUnsupported) {
+                            waitingForInitialSleepState = false;
+                            historyStateDeadlineAt = 0;
+                        } else {
+                            waitingForInitialSleepState = true;
+                            historyStateDeadlineAt = now
+                                    + TimeUnit.SECONDS.toNanos(INITIAL_HISTORY_SYNC_WAIT_SECONDS);
+                        }
+                        if (restartCooldown) {
+                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                                    "HISTORY_SYNC restart cooldown active");
+                        }
+                        nextSleepStateAt = now + TimeUnit.MINUTES.toNanos(SLEEP_STATE_POLL_MINUTES);
+                        nextNightStatsAt = now;
                         syncRequested = false;
+                        maybeWakeCatchup(now);
                         healthReplay.request();
                         dndSync.newLink();
                         main.removeCallbacks(dndAskFallback);
-                        queue.send(realtimeStats(REALTIME_STATS_START));
-                        realtimeStatsStopPending = true;
-                        coordinator.schedule(() -> {
-                            if (epoch == sessionEpoch) stopRealtimeStats();
-                        }, REALTIME_STATS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                        historySync.request(true);
+                        if (!(night && (nightQuiet() || restartCooldown))) {
+                            queue.send(realtimeStats(REALTIME_STATS_START));
+                            realtimeStatsStopPending = true;
+                            nextNightStatsAt = now + TimeUnit.MINUTES.toNanos(NIGHT_STATS_REFRESH_MINUTES);
+                            coordinator.schedule(() -> {
+                                if (epoch == sessionEpoch) stopRealtimeStats();
+                            }, REALTIME_STATS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                        }
                         syncDnd();
                         requestSleepState();
                         });
@@ -891,7 +974,9 @@ public final class BandLiveService extends Service {
                             noteBandDndSync(command);
                             if (command.getSubtype() == 109) adoptStoredBand();
                             applyBandManual(command);
-                            noteSleep(command);
+                            coordinator.execute(() -> {
+                                if (epoch == sessionEpoch) noteSleep(command);
+                            });
                         } else if (command.getType() == 10 || command.getType() == 7 || command.getType() == 18) {
                             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(BandLiveService.this,
                                     "rx type=" + command.getType() + " subtype=" + command.getSubtype()
@@ -1065,6 +1150,242 @@ public final class BandLiveService extends Service {
                 .setType(8).setSubtype(subtype).build();
     }
 
+    static boolean isNightWindow(int hour) {
+        return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
+    }
+
+    private static boolean isNightWindow() {
+        return isNightWindow(java.time.LocalTime.now().getHour());
+    }
+
+    static long historyPeriodMinutes(int hour) {
+        return isNightWindow(hour) ? NIGHT_POLL_MINUTES : IDLE_POLL_MINUTES;
+    }
+
+    private static long historyPeriodMinutes() {
+        return historyPeriodMinutes(java.time.LocalTime.now().getHour());
+    }
+
+    public static boolean sleepStateUnsupportedForCurrentDevice(Context context) {
+        try {
+            String deviceId = new BandStateRepository(context).deviceId();
+            return !deviceId.isBlank() && context.getSharedPreferences(LIVE_PREFS, MODE_PRIVATE)
+                    .getBoolean(sleepUnsupportedKey(deviceId), false);
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    private static String sleepUnsupportedKey(String deviceId) {
+        return "sleepStateUnsupported_" + deviceId;
+    }
+
+    private static String lastNightFlushKey(String deviceId) {
+        return LAST_NIGHT_FLUSH + "_" + deviceId;
+    }
+
+    private void loadSleepStateCapability(BandStateRepository repository) {
+        String deviceId = repository.deviceId();
+        sleepStateUnsupported = !deviceId.isBlank() && getSharedPreferences(LIVE_PREFS, MODE_PRIVATE)
+                .getBoolean(sleepUnsupportedKey(deviceId), false);
+        sleepStateMisses = 0;
+        lastNightFlushAtMs = deviceId.isBlank() ? 0
+                : getSharedPreferences(LIVE_PREFS, MODE_PRIVATE).getLong(lastNightFlushKey(deviceId), 0);
+    }
+
+    private void persistSleepStateUnsupported(boolean unsupported) {
+        try {
+            String deviceId = new BandStateRepository(this).deviceId();
+            if (deviceId.isBlank()) return;
+            getSharedPreferences(LIVE_PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(sleepUnsupportedKey(deviceId), unsupported).apply();
+        } catch (RuntimeException ignored) { }
+    }
+
+    @androidx.annotation.WorkerThread
+    private void noteSleepStateMiss() {
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, "SLEEP_STATE query missed");
+        android.util.Log.i("OplusBandBridge", "SLEEP_STATE_QUERY_FAILED");
+        sleepStateMisses++;
+        if (sleepStateMisses < SLEEP_STATE_MISS_LIMIT || sleepStateUnsupported) return;
+        sleepStateUnsupported = true;
+        waitingForInitialSleepState = false;
+        historyStateDeadlineAt = 0;
+        persistSleepStateUnsupported(true);
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "SLEEP_STATE unsupported, switching to quiet heuristic");
+    }
+
+    /**
+     * Night and a fresh, stable step sample for an hour. This is only a sync suppressor; it never
+     * writes sleep to the host and is never used for the sleep-music switch.
+     */
+    @androidx.annotation.WorkerThread
+    private boolean nightQuiet() {
+        if (!isNightWindow()) {
+            quietStepsValue = Long.MIN_VALUE;
+            quietCheckedAtMs = 0;
+            quietBaselineSteps = -1;
+            quietSampleAtMs = 0;
+            quietSignalStale = false;
+            nightQuietResult = false;
+            return false;
+        }
+        long nowMs = System.currentTimeMillis();
+        if (quietCheckedAtMs > 0 && nowMs - quietCheckedAtMs < 60_000L) {
+            return nightQuietResult;
+        }
+        quietCheckedAtMs = nowMs;
+        long steps;
+        long stepsAt;
+        try {
+            BandStateRepository repository = new BandStateRepository(this);
+            steps = repository.stepsToday();
+            stepsAt = repository.stepsAtMs();
+        } catch (RuntimeException unavailable) {
+            quietStepsValue = Long.MIN_VALUE;
+            quietBaselineSteps = -1;
+            quietSignalStale = true;
+            nightQuietResult = false;
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "SLEEP_QUIET stale=true quiet=false steps=unavailable");
+            return false;
+        }
+        boolean stale = steps < 0 || staleStepSample(nowMs, stepsAt);
+        if (stale) {
+            boolean changed = !quietSignalStale || quietStepsValue != Long.MIN_VALUE;
+            quietStepsValue = Long.MIN_VALUE;
+            quietBaselineSteps = -1;
+            nightQuietResult = false;
+            quietSignalStale = true;
+            if (changed) {
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                        "SLEEP_QUIET stale=true quiet=false steps=" + steps);
+            }
+            return false;
+        }
+        boolean newSample = stepsAt != quietSampleAtMs;
+        boolean wasQuiet = nightQuietResult;
+        quietSampleAtMs = stepsAt;
+        quietSignalStale = false;
+        if (quietStepsValue == Long.MIN_VALUE) {
+            quietStepsValue = steps;
+            quietBaselineSteps = steps;
+            quietSinceMs = nowMs;
+            nightQuietResult = false;
+        } else if (steps != quietStepsValue) {
+            if (quietStepNoise(steps, quietBaselineSteps)) {
+                // The pedometer can tick by a handful of steps while the user is still asleep.
+                // Keep the original quiet start; only a real walk resets it.
+                quietStepsValue = steps;
+                nightQuietResult = quietElapsed(nowMs, quietSinceMs);
+            } else {
+                quietStepsValue = steps;
+                quietBaselineSteps = steps;
+                quietSinceMs = nowMs;
+                nightQuietResult = false;
+            }
+        } else {
+            nightQuietResult = quietElapsed(nowMs, quietSinceMs);
+        }
+        if (newSample || wasQuiet != nightQuietResult) {
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "SLEEP_QUIET stale=false quiet=" + nightQuietResult + " steps=" + steps);
+        }
+        return nightQuietResult;
+    }
+
+    static boolean staleStepSample(long nowMs, long stepsAtMs) {
+        return stepsAtMs <= 0
+                || nowMs - stepsAtMs > TimeUnit.MINUTES.toMillis(QUIET_SAMPLE_MAX_AGE_MINUTES);
+    }
+
+    static boolean quietStepNoise(long steps, long baselineSteps) {
+        return baselineSteps >= 0 && steps >= baselineSteps
+                && steps - baselineSteps < QUIET_WAKE_STEPS;
+    }
+
+    static boolean quietElapsed(long nowMs, long quietSinceMs) {
+        return quietSinceMs > 0
+                && nowMs - quietSinceMs >= TimeUnit.MINUTES.toMillis(QUIET_STEPS_MINUTES);
+    }
+
+    static boolean shouldRequestHistory(boolean night, boolean unsupported, Boolean bandAsleep,
+            boolean waitingInitial, boolean quiet, boolean cooldownActive) {
+        if (waitingInitial || cooldownActive) return false;
+        if (!unsupported) return !Boolean.TRUE.equals(bandAsleep);
+        return !quiet;
+    }
+
+    static boolean nightAwakeConfirmed(boolean night, int awakeSamples) {
+        return !night || awakeSamples >= AWAKE_CONFIRM_SAMPLES;
+    }
+
+    private void updateNightTransition(long nowNanos) {
+        boolean night = isNightWindow();
+        if (night) {
+            boolean quiet = nightQuiet();
+            if (quiet) {
+                nightHadQuiet = true;
+            } else if (nightHadQuiet) {
+                nightHadQuiet = false;
+                if (quietSignalStale) {
+                    io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                            "HISTORY_SYNC stale quiet signal, wake catch-up withheld");
+                } else {
+                    // A real step sample ended quiet while still inside the night window. This
+                    // is an awake sync, so it still never requests the full history list.
+                    syncRequested = true;
+                    nextHealthAt = nowNanos;
+                    io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                            "HISTORY_SYNC quiet ended wake catch-up");
+                }
+            }
+        }
+        if (nightWindowLast && !night) maybeWakeCatchup(nowNanos);
+        nightWindowLast = night;
+        if (!night) {
+            quietStepsValue = Long.MIN_VALUE;
+            quietCheckedAtMs = 0;
+            quietBaselineSteps = -1;
+            quietSampleAtMs = 0;
+            quietSignalStale = false;
+            nightQuietResult = false;
+            nightHadQuiet = false;
+        }
+    }
+
+    /** A daytime session after a night flush gets one full history pass. */
+    private void maybeWakeCatchup(long nowNanos) {
+        if (isNightWindow() || lastNightFlushAtMs <= 0) return;
+        long nowMs = System.currentTimeMillis();
+        if (nowMs < lastNightFlushAtMs) return;
+        try {
+            String deviceId = new BandStateRepository(this).deviceId();
+            if (deviceId.isBlank()) return;
+            String today = java.time.LocalDate.now().toString();
+            String key = WAKE_CATCHUP_DATE + "_" + deviceId;
+            var prefs = getSharedPreferences(LIVE_PREFS, MODE_PRIVATE);
+            if (today.equals(prefs.getString(key, ""))) return;
+            prefs.edit().putString(key, today).apply();
+            syncRequested = true;
+            nextHealthAt = nowNanos;
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "HISTORY_SYNC wake catch-up");
+        } catch (RuntimeException ignored) { }
+    }
+
+    private void persistNightCooldown() {
+        lastNightFlushAtMs = System.currentTimeMillis();
+        try {
+            String deviceId = new BandStateRepository(this).deviceId();
+            if (!deviceId.isBlank()) {
+                getSharedPreferences(LIVE_PREFS, MODE_PRIVATE).edit()
+                        .putLong(lastNightFlushKey(deviceId), lastNightFlushAtMs).apply();
+            }
+        } catch (RuntimeException ignored) { }
+    }
+
     /** Ends the live-stats stream once; a running stream keeps the band measuring heart rate. */
     private void stopRealtimeStats() {
         if (!realtimeStatsStopPending) return;
@@ -1083,6 +1404,7 @@ public final class BandLiveService extends Service {
             return;
         }
         long now = System.nanoTime();
+        updateNightTransition(now);
         long beatAge = android.os.SystemClock.elapsedRealtime() - supervisorBeatMs;
         if (running.get() && supervisorBeatMs != 0L && beatAge > SUPERVISOR_STALL_MS) {
             // The coordinator survives a process freeze, so it can put the worker back after the
@@ -1091,6 +1413,15 @@ public final class BandLiveService extends Service {
             supervisorBeatMs = android.os.SystemClock.elapsedRealtime();
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                     "supervise stalled " + (beatAge / 1000) + "s, restarting");
+            if (isNightWindow()) {
+                historySyncPending = false;
+                nextHealthAt = now + TimeUnit.MINUTES.toNanos(NIGHT_RESTART_COOLDOWN_MINUTES);
+                historyCooldownUntilMs = System.currentTimeMillis()
+                        + TimeUnit.MINUTES.toMillis(NIGHT_RESTART_COOLDOWN_MINUTES);
+                persistNightCooldown();
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                        "HISTORY_SYNC night restart cooldown");
+            }
             try {
                 worker.execute(this::supervise);
             } catch (java.util.concurrent.RejectedExecutionException stopping) { }
@@ -1103,21 +1434,33 @@ public final class BandLiveService extends Service {
                         if (error != null) writeStatus("BATTERY_REFRESH_FAILED");
                     });
         }
-        if (syncRequested || now >= nextHealthAt) {
-            boolean historical = syncRequested;
-            syncRequested = false;
-            nextHealthAt = now + TimeUnit.MINUTES.toNanos(IDLE_POLL_MINUTES);
-            historySync.request(historical);
-            if (historical) {
-                bindHealthHost();
-                nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
-                weatherSync.refreshAndSend();
+        if (isNightWindow() && running.get() && now >= nextNightStatsAt) {
+            nextNightStatsAt = now + TimeUnit.MINUTES.toNanos(NIGHT_STATS_REFRESH_MINUTES);
+            var statsQueue = commands;
+            if (statsQueue != null && !realtimeStatsStopPending) {
+                statsQueue.send(realtimeStats(REALTIME_STATS_START));
+                realtimeStatsStopPending = true;
+                long epoch = sessionEpoch;
+                coordinator.schedule(() -> {
+                    if (epoch == sessionEpoch) stopRealtimeStats();
+                }, REALTIME_STATS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             }
         }
-        // Bands that leave 2/78 unanswered still publish sleep as a history file.
-        if (sleepPauseOn && now >= nextSleepFileAt) {
-            nextSleepFileAt = now + TimeUnit.MINUTES.toNanos(10);
-            historySync.request(false);
+        if (now >= nextSleepStateAt) {
+            nextSleepStateAt = now + TimeUnit.MINUTES.toNanos(SLEEP_STATE_POLL_MINUTES);
+            requestSleepState();
+        }
+        if (waitingForInitialSleepState && now >= historyStateDeadlineAt) {
+            waitingForInitialSleepState = false;
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "HISTORY_SYNC sleep-state timeout, deferring");
+            nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes());
+        }
+        if (syncRequested || now >= nextHealthAt) {
+            boolean historical = syncRequested && !isNightWindow();
+            syncRequested = false;
+            nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes());
+            requestHistoryWhenAwake(historical);
         }
         if (now >= nextWeatherAt) {
             nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
@@ -1501,20 +1844,89 @@ public final class BandLiveService extends Service {
         });
     }
 
+    private boolean historyMayRun() {
+        boolean night = isNightWindow();
+        boolean cooldown = night && System.currentTimeMillis() < historyCooldownUntilMs;
+        boolean quiet = sleepStateUnsupported && !waitingForInitialSleepState
+                && !cooldown && nightQuiet();
+        return shouldRequestHistory(night, sleepStateUnsupported, bandAsleep,
+                waitingForInitialSleepState, quiet, cooldown);
+    }
+
+    private void requestHistoryWhenAwake(boolean historical) {
+        pendingHistoryIncludesHistory |= historical && !isNightWindow();
+        historySyncPending = true;
+        if (!historyMayRun()) {
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "HISTORY_SYNC deferred asleep=" + bandAsleep
+                            + " waiting=" + waitingForInitialSleepState
+                            + " quiet=" + (sleepStateUnsupported && nightQuiet()));
+            return;
+        }
+        flushPendingHistory();
+    }
+
+    private void flushPendingHistory() {
+        if (!historySyncPending || !historyMayRun() || historySync == null) return;
+        boolean historical = pendingHistoryIncludesHistory && !isNightWindow();
+        historySyncPending = false;
+        pendingHistoryIncludesHistory = false;
+        historySync.request(historical);
+        if (isNightWindow()) {
+            nightHadQuiet |= nightQuiet();
+            persistNightCooldown();
+        }
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "HISTORY_SYNC resume includesHistory=" + historical);
+        if (historical) {
+            bindHealthHost();
+            nextWeatherAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
+            weatherSync.refreshAndSend();
+        }
+    }
+
     private void requestSleepState() {
         var queue = commands;
-        if (stopRequested || queue == null || !sleepPauseOn) return;
+        if (sleepStateUnsupported || stopRequested || queue == null) return;
+        long epoch = sessionEpoch;
         queue.request(io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.query(), 2, 78).exceptionally(error -> {
-            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, "SLEEP_MUSIC query missed");
-            android.util.Log.i("OplusBandBridge", "SLEEP_MUSIC_QUERY_FAILED");
+            coordinator.execute(() -> {
+                if (epoch == sessionEpoch && !stopRequested) noteSleepStateMiss();
+            });
             return null;
         });
     }
 
+    @androidx.annotation.WorkerThread
     private void noteSleep(nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
-        if (!sleepPauseOn) return;
         Boolean asleep = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.asleep(command);
         if (asleep == null) return;
+        sleepStateMisses = 0;
+        if (sleepStateUnsupported) {
+            sleepStateUnsupported = false;
+            persistSleepStateUnsupported(false);
+        }
+        boolean changed = !asleep.equals(bandAsleep);
+        bandAsleep = asleep;
+        waitingForInitialSleepState = false;
+        historyStateDeadlineAt = 0;
+        if (changed && historySyncPending) {
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "HISTORY_SYNC sleep state=" + (asleep ? "SLEEPING" : "AWAKE")
+                            + " pending=" + historySyncPending);
+        }
+        if (asleep) {
+            awakeSamples = 0;
+        } else {
+            awakeSamples++;
+            if (nightAwakeConfirmed(isNightWindow(), awakeSamples)) {
+                coordinator.execute(this::flushPendingHistory);
+            } else {
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                        "SLEEP_STATE awake streak=" + awakeSamples + " (deferred)");
+            }
+        }
+        if (!sleepPauseOn) return;
         long now = System.currentTimeMillis();
         var report = command.getSubtype() == 79 ? sleepMusic.push(asleep, now) : sleepMusic.observe(asleep, now);
         if ((report.effect() == io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.Effect.BASELINE && asleep)
