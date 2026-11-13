@@ -18,12 +18,11 @@ import android.os.Looper;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.view.View;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.google.android.material.materialswitch.MaterialSwitch;
+import com.hchen.himiuix.MiuixSwitchView;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
@@ -70,7 +69,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView metricsLine;
     private TextView healthLine;
     private TextView ownershipStatus;
-    private Button homePrimary;
+    private BridgeScreen.ActionRow homePrimary;
     // setup card
     private LinearLayout setupCard;
     private TextView setupTitle;
@@ -78,7 +77,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView stepImport;
     private TextView stepAdd;
     private TextView primaryHint;
-    private Button openKsu;
+    private BridgeScreen.ActionRow openKsu;
     // notices
     private LinearLayout nearbyNotice;
     private LinearLayout notifyNotice;
@@ -86,13 +85,13 @@ public final class MainActivity extends AppCompatActivity {
     // management
     private TextView manageHeading;
     private LinearLayout manageCard;
-    private Button remove;
-    private Button restore;
+    private BridgeScreen.ActionRow remove;
+    private BridgeScreen.ActionRow restore;
     // advanced
     private LinearLayout bonded;
     private TextView status;
-    private Button open;
-    private Button advancedRestore;
+    private BridgeScreen.ActionRow open;
+    private BridgeScreen.ActionRow advancedRestore;
 
     private String selectedAddress = "";
     private String databaseImportNote = "";
@@ -195,21 +194,17 @@ public final class MainActivity extends AppCompatActivity {
         screen.caption(links, "在控制中心添加「手环」磁贴，下拉或点按即可连接。");
 
         LinearLayout sleepCard = screen.card();
-        MaterialSwitch sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
+        MiuixSwitchView sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
                 "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。打开开关时如果已经入睡，会在下一次入睡时生效。"
                         + "通过睡眠记录报告入睡的手环，会在记录同步后暂停，通常需要几分钟。");
-        final boolean[] writingSleepPause = {false};
         sleepPause.setChecked(SleepMusic.enabled(this));
-        sleepPause.setOnCheckedChangeListener((button, checked) -> {
-            if (writingSleepPause[0]) return;
+        sleepPause.setOnStateChangeListener(checked -> {
             if (SleepMusic.setEnabled(this, checked)) {
                 BandLiveService.sleepPauseChanged(this);
-                return;
+                return true;
             }
-            writingSleepPause[0] = true;
-            button.setChecked(!checked);
-            writingSleepPause[0] = false;
             ownershipStatus.setText("开关状态保存中断，再拨一次即可。");
+            return false;
         });
     }
 
@@ -281,8 +276,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private static void setShown(LinearLayout cardInner, boolean shown) {
-        View frame = (View) cardInner.getParent();
-        (frame == null ? cardInner : frame).setVisibility(shown ? View.VISIBLE : View.GONE);
+        cardInner.setVisibility(shown ? View.VISIBLE : View.GONE);
     }
 
     // ---- lifecycle ----
@@ -920,7 +914,8 @@ public final class MainActivity extends AppCompatActivity {
             String mac = device.getAddress() == null ? "" : device.getAddress().toUpperCase(java.util.Locale.ROOT);
             String name = BandCatalog.displayName(null, device.getName());
             boolean chosen = !mac.isBlank() && mac.equals(selectedAddress);
-            Button choice = screen.outlined(bonded, (chosen ? "✓ " : "") + name, () -> {
+            BridgeScreen.ActionRow choice = screen.outlined(bonded,
+                    (chosen ? "✓ " : "") + name, () -> {
                 selectedAddress = mac;
                 refreshBonded();
             });

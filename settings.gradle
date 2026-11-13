@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = 'mi-band11-oplus13'
 include ':app'
+include ':HiMiuix'

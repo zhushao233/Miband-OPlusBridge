@@ -10,7 +10,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -38,7 +37,7 @@ public final class BandDetailsActivity extends AppCompatActivity {
     private TextView updated;
     private TextView history;
     private TextView saved;
-    private Button next;
+    private BridgeScreen.ActionRow next;
     private LinearLayout stepReviews;
     private int reviewGeneration;
     private boolean approvingStepAudit;
@@ -222,7 +221,8 @@ public final class BandDetailsActivity extends AppCompatActivity {
                     String date = stepDate(review.date());
                     screen.bodyText(stepReviews, date + " · 分钟和设备记录 " + review.expectedSteps()
                             + " 步\n健康合并 " + review.combinedSteps() + " 步 · 手机汇总 " + review.phoneSteps() + " 步");
-                    Button action = screen.outlined(stepReviews, entry.approved() ? "已确认，等待健康校正" : "核对并校正",
+                    BridgeScreen.ActionRow action = screen.outlined(stepReviews,
+                            entry.approved() ? "已确认，等待健康校正" : "核对并校正",
                             () -> confirmStepReview(review));
                     action.setEnabled(!entry.approved() && !approvingStepAudit);
                 }

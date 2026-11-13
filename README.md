@@ -28,7 +28,7 @@
 
 ## 界面
 
-首页从上到下：手环状态和一个主按钮 → 首次设置清单（三步，完成后隐藏）→ 待处理事项（附近设备、通知、OPPO 健康通知使用权）→ 功能 → 帮助 → 管理 → 高级设置。界面跟随系统深色模式。
+模块界面使用 [HiMiuix](https://github.com/HChenX/HiMiuix) 的 Miuix 风格 XML 组件。首页从上到下：手环状态和一个主按钮 → 首次设置清单（三步，完成后隐藏）→ 待处理事项（附近设备、通知、OPPO 健康通知使用权）→ 功能 → 帮助 → 管理 → 高级设置。界面跟随系统深色模式。
 
 ## 历史步数汇总核对
 
@@ -91,6 +91,7 @@ tag 格式：`{versionCode}-{versionName}`。`workflow_dispatch` 只更新源仓
 
 - [AstroBox-NG](https://github.com/AstralSightStudios/AstroBox-NG)（AstralSightStudios）
 - [Gadgetbridge](https://gadgetbridge.org/)
+- [HiMiuix](https://github.com/HChenX/HiMiuix)（HChenX，LGPL-2.1）提供模块界面的基础组件和主题样式
 
 ## 许可证
 
