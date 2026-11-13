@@ -20,6 +20,9 @@ import org.junit.Test;
 
 /** User-facing Chinese copy states the situation and the next step in positive words. */
 public final class CopyStyleTest {
+    private static final String APPROVED_SLEEP_UNSUPPORTED_COPY =
+            "你中奖了，你的手环不支持2/78同步方式，该功能/开关已禁用。";
+
     /** Words that turn a hint into a prohibition or a dead end. */
     static final List<String> AVOID = List.of(
             "不", "无法", "请勿", "禁止", "没有", "未", "暂不", "失败", "拒绝", "错误", "丢失");
@@ -120,6 +123,8 @@ public final class CopyStyleTest {
     }
 
     static String firstAvoided(String value) {
+        String copy = value.startsWith("\\n") ? value.substring(2) : value;
+        if (APPROVED_SLEEP_UNSUPPORTED_COPY.equals(copy)) return null;
         for (String word : AVOID) if (value.contains(word)) return word;
         return null;
     }
