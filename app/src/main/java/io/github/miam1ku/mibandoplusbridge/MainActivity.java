@@ -18,12 +18,11 @@ import android.os.Looper;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.view.View;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.google.android.material.materialswitch.MaterialSwitch;
+import com.hchen.himiuix.MiuixSwitchView;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
@@ -70,7 +69,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView metricsLine;
     private TextView healthLine;
     private TextView ownershipStatus;
-    private Button homePrimary;
+    private BridgeScreen.ActionRow homePrimary;
     // setup card
     private LinearLayout setupCard;
     private TextView setupTitle;
@@ -78,7 +77,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView stepImport;
     private TextView stepAdd;
     private TextView primaryHint;
-    private Button openKsu;
+    private BridgeScreen.ActionRow openKsu;
     // notices
     private LinearLayout nearbyNotice;
     private LinearLayout notifyNotice;
@@ -86,14 +85,13 @@ public final class MainActivity extends AppCompatActivity {
     // management
     private TextView manageHeading;
     private LinearLayout manageCard;
-    private Button remove;
-    private Button restore;
+    private BridgeScreen.ActionRow remove;
+    private BridgeScreen.ActionRow restore;
     // advanced
     private LinearLayout bonded;
     private TextView status;
-    private TextView deviceLogHint;
-    private Button open;
-    private Button advancedRestore;
+    private BridgeScreen.ActionRow open;
+    private BridgeScreen.ActionRow advancedRestore;
 
     private String selectedAddress = "";
     private String databaseImportNote = "";
@@ -105,7 +103,6 @@ public final class MainActivity extends AppCompatActivity {
     private boolean profileAfterRestore;
     private boolean rootGranted;
     private boolean probingRoot;
-    private boolean sleepPauseWriting;
     private Change pendingPermission;
 
     /** Open the profile window when this restore task succeeded and the user came in from the capture entry. */
@@ -165,7 +162,7 @@ public final class MainActivity extends AppCompatActivity {
         stepImport = screen.stepRow(setupCard, 2, "导入绑定", StepState.LATER);
         stepAdd = screen.stepRow(setupCard, 3, "添加到健康", StepState.LATER);
         primaryHint = screen.caption(setupCard, "");
-        openKsu = screen.outlined(setupCard, "打开 Root 管理器", this::openKernelSu);
+        openKsu = screen.outlined(setupCard, "打开 KernelSU", this::openKernelSu);
         LinearLayout prereq = screen.expander(setupCard, "开始前准备", null);
         screen.caption(prereq, Copy.SETUP_PREREQ);
     }
@@ -197,34 +194,18 @@ public final class MainActivity extends AppCompatActivity {
         screen.caption(links, "在控制中心添加「手环」磁贴，下拉或点按即可连接。");
 
         LinearLayout sleepCard = screen.card();
-        boolean sleepStateUnsupported = BandLiveService.sleepStateUnsupportedForCurrentDevice(this);
-        if (sleepStateUnsupported) {
-            screen.bodyText(sleepCard, "当前手环会在下次同步时更新睡眠状态。");
-            return;
-        }
-        MaterialSwitch sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
-                "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。");
+        MiuixSwitchView sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
+                "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。打开开关时如果已经入睡，会在下一次入睡时生效。"
+                        + "通过睡眠记录报告入睡的手环，会在记录同步后暂停，通常需要几分钟。");
         sleepPause.setChecked(SleepMusic.enabled(this));
-        sleepPause.setOnCheckedChangeListener((button, checked) -> {
-            if (sleepPauseWriting) return;
-            applySleepPause(button, checked);
+        sleepPause.setOnStateChangeListener(checked -> {
+            if (SleepMusic.setEnabled(this, checked)) {
+                BandLiveService.sleepPauseChanged(this);
+                return true;
+            }
+            ownershipStatus.setText("开关状态保存中断，再拨一次即可。");
+            return false;
         });
-    }
-
-    private void applySleepPause(android.widget.CompoundButton toggle, boolean enabled) {
-        if (SleepMusic.setEnabled(this, enabled)) {
-            setSleepPauseChecked(toggle, enabled);
-            BandLiveService.sleepPauseChanged(this);
-            return;
-        }
-        setSleepPauseChecked(toggle, !enabled);
-        ownershipStatus.setText("开关状态保存中断，再拨一次即可。");
-    }
-
-    private void setSleepPauseChecked(android.widget.CompoundButton toggle, boolean checked) {
-        sleepPauseWriting = true;
-        toggle.setChecked(checked);
-        sleepPauseWriting = false;
     }
 
     private void buildHelp() {
@@ -281,7 +262,6 @@ public final class MainActivity extends AppCompatActivity {
 
         LinearLayout debug = screen.card(advanced);
         screen.overline(debug, "调试");
-        screen.navRow(debug, "拉取设备日志", () -> startActivity(new Intent(this, DeviceLogActivity.class)));
         screen.navRow(debug, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
         if (BuildConfig.DEBUG) {
             screen.navRow(debug, "独立连接诊断", () -> startActivity(new Intent(this, DiagnosticActivity.class)));
@@ -296,8 +276,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private static void setShown(LinearLayout cardInner, boolean shown) {
-        View frame = (View) cardInner.getParent();
-        (frame == null ? cardInner : frame).setVisibility(shown ? View.VISIBLE : View.GONE);
+        cardInner.setVisibility(shown ? View.VISIBLE : View.GONE);
     }
 
     // ---- lifecycle ----
@@ -392,7 +371,7 @@ public final class MainActivity extends AppCompatActivity {
                 Uri uri = androidx.core.content.FileProvider.getUriForFile(this,
                         "io.github.miam1ku.mibandoplusbridge.debuglog", file);
                 Intent send = new Intent(Intent.ACTION_SEND);
-                send.setType("application/zip");
+                send.setType("text/plain");
                 send.putExtra(Intent.EXTRA_STREAM, uri);
                 send.putExtra(Intent.EXTRA_SUBJECT, "小米手环桥接调试日志");
                 send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -443,14 +422,14 @@ public final class MainActivity extends AppCompatActivity {
     private void requestRoot() {
         if (worker.isShutdown() || probingRoot || changingOwnership) return;
         probingRoot = true;
-        ownershipStatus.setText("正在检查 Root 授权…");
+        ownershipStatus.setText("正在检查 KernelSU 授权…");
         worker.execute(() -> {
             boolean granted = new OwnershipController(this).probeRoot();
             main.post(() -> {
                 if (isDestroyed()) return;
                 probingRoot = false;
                 rootGranted = granted;
-                ownershipStatus.setText(granted ? "Root 权限已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
+                ownershipStatus.setText(granted ? "KernelSU 已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
                 updateControls();
                 refreshDevice();
                 if (granted) continueInit();
@@ -461,7 +440,7 @@ public final class MainActivity extends AppCompatActivity {
     private void openKernelSu() {
         Intent launch = getPackageManager().getLaunchIntentForPackage("me.weishu.kernelsu");
         if (launch == null) {
-            ownershipStatus.setText("安装 Root 管理器后，为本应用打开超级用户。");
+            ownershipStatus.setText("安装 KernelSU 管理器后，为本应用打开超级用户。");
             return;
         }
         startActivity(launch);
@@ -762,7 +741,6 @@ public final class MainActivity extends AppCompatActivity {
             deviceName.setText("小米手环");
             screen.setChip(statusChip, "解锁后显示", Tone.NEUTRAL);
             setOptionalCaption(connectionHint, "解锁手机后显示手环信息。");
-            setDeviceLogHint("解锁后查看设备日志");
             metricsLine.setVisibility(View.GONE);
             healthLine.setVisibility(View.GONE);
             return;
@@ -834,12 +812,6 @@ public final class MainActivity extends AppCompatActivity {
         boolean show = value != null && !value.isBlank();
         view.setVisibility(show ? View.VISIBLE : View.GONE);
         view.setText(show ? value : "");
-    }
-
-    private void setDeviceLogHint(String value) {
-        if (deviceLogHint == null) return;
-        deviceLogHint.setText(value);
-        deviceLogHint.setVisibility(View.VISIBLE);
     }
 
     private static String safeIdentity(String value, String fallback) {
@@ -942,7 +914,8 @@ public final class MainActivity extends AppCompatActivity {
             String mac = device.getAddress() == null ? "" : device.getAddress().toUpperCase(java.util.Locale.ROOT);
             String name = BandCatalog.displayName(null, device.getName());
             boolean chosen = !mac.isBlank() && mac.equals(selectedAddress);
-            Button choice = screen.outlined(bonded, (chosen ? "✓ " : "") + name, () -> {
+            BridgeScreen.ActionRow choice = screen.outlined(bonded,
+                    (chosen ? "✓ " : "") + name, () -> {
                 selectedAddress = mac;
                 refreshBonded();
             });

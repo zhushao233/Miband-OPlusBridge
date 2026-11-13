@@ -7,7 +7,6 @@ import android.database.ContentObserver;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -30,9 +29,9 @@ public final class WeatherActivity extends AppCompatActivity {
     private TextView status;
     private TextView delivery;
     private TextView association;
-    private Button send;
-    private Button review;
-    private Button clearReview;
+    private BridgeScreen.ActionRow send;
+    private BridgeScreen.ActionRow review;
+    private BridgeScreen.ActionRow clearReview;
     private volatile BandWeatherEncoder.Sample ready;
     private boolean running;
     private final ContentObserver updates = new ContentObserver(main) {
