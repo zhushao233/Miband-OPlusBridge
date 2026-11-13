@@ -125,7 +125,7 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        screen = BridgeScreen.attach(this, "小米穿戴设备桥接", false);
+        screen = BridgeScreen.attach(this, "小米手环桥接", false);
         buildStatusCard();
         buildSetupCard();
         buildNotices();
@@ -164,7 +164,7 @@ public final class MainActivity extends AppCompatActivity {
         stepImport = screen.stepRow(setupCard, 2, "导入绑定", StepState.LATER);
         stepAdd = screen.stepRow(setupCard, 3, "添加到健康", StepState.LATER);
         primaryHint = screen.caption(setupCard, "");
-        openKsu = screen.outlined(setupCard, "Root 管理器", this::openKernelSu);
+        openKsu = screen.outlined(setupCard, "打开 KernelSU", this::openKernelSu);
         LinearLayout prereq = screen.expander(setupCard, "开始前准备", null);
         screen.caption(prereq, Copy.SETUP_PREREQ);
     }
@@ -200,7 +200,7 @@ public final class MainActivity extends AppCompatActivity {
         String sleepPauseCopy = "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。"
                 + "手环支持睡眠状态查询时立即生效，其他型号在下次同步后延迟生效。";
         if (sleepStateUnsupported) {
-            sleepPauseCopy += "\n当前手环采用同步后延迟生效方式。";
+            sleepPauseCopy += "\n你中奖了，你的手环不支持2/78同步方式，该功能/开关已禁用。";
         }
         MaterialSwitch sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
                 sleepPauseCopy);
@@ -445,14 +445,14 @@ public final class MainActivity extends AppCompatActivity {
     private void requestRoot() {
         if (worker.isShutdown() || probingRoot || changingOwnership) return;
         probingRoot = true;
-        ownershipStatus.setText("正在检查 Root 授权…");
+        ownershipStatus.setText("正在检查 KernelSU 授权…");
         worker.execute(() -> {
             boolean granted = new OwnershipController(this).probeRoot();
             main.post(() -> {
                 if (isDestroyed()) return;
                 probingRoot = false;
                 rootGranted = granted;
-                ownershipStatus.setText(granted ? "Root 权限已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
+                ownershipStatus.setText(granted ? "KernelSU 已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
                 updateControls();
                 refreshDevice();
                 if (granted) continueInit();
@@ -463,7 +463,7 @@ public final class MainActivity extends AppCompatActivity {
     private void openKernelSu() {
         Intent launch = getPackageManager().getLaunchIntentForPackage("me.weishu.kernelsu");
         if (launch == null) {
-            ownershipStatus.setText("安装 Root 管理器后，为本应用打开超级用户。");
+            ownershipStatus.setText("安装 KernelSU 管理器后，为本应用打开超级用户。");
             return;
         }
         startActivity(launch);
@@ -620,7 +620,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         new MaterialAlertDialogBuilder(this)
                 .setTitle("添加到健康并接管？")
-                .setMessage("小米运动健康会停用，由桥接接管手环。开始前请结束表盘安装、OTA 升级和 NFC 操作。"
+                .setMessage("小米运动健康会暂停，由桥接接管手环。开始前请结束表盘安装、OTA 升级和 NFC 操作。"
                         + "绑定和健康历史都会保留。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("添加并接管", (dialog, which) -> changeOwnership(change))
