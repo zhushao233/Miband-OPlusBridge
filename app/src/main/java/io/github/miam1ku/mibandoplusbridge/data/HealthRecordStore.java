@@ -380,8 +380,10 @@ public final class HealthRecordStore extends SQLiteOpenHelper {
         String after = "";
         while (found.size() <= 4_000) {
             int count = 0;
-            try (Cursor rows = measurements(requireConfirmedAccount(getReadableDatabase()), deviceId,
-                    kind, startMs, endMs, after)) {
+            try (Cursor rows = isDeviceSleep(kind)
+                    ? deviceSleep(deviceId, kind, startMs, endMs, after)
+                    : measurements(requireConfirmedAccount(getReadableDatabase()), deviceId,
+                            kind, startMs, endMs, after)) {
                 while (rows.moveToNext()) {
                     count++;
                     after = rows.getString(0);
