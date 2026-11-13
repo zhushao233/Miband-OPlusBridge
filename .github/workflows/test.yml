@@ -1,9 +1,11 @@
 name: Test
+run-name: Test · ${{ github.event_name }} · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -32,3 +34,92 @@ jobs:
         run: python3 scripts/check_upstream.py
       - name: Unit tests
         run: chmod +x ./gradlew && ./gradlew --no-daemon :app:testDebugUnitTest
+
+  build-apk:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      TZ: Asia/Shanghai
+      PROJECT_KEYSTORE_BASE64: ${{ secrets.OPLUSBAND_KEYSTORE_BASE64 }}
+      PROJECT_STORE_PASSWORD: ${{ secrets.OPLUSBAND_STORE_PASSWORD }}
+      PROJECT_KEY_ALIAS: ${{ secrets.OPLUSBAND_KEY_ALIAS }}
+      PROJECT_KEY_PASSWORD: ${{ secrets.OPLUSBAND_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0"
+      - name: Restore stable CI debug signing
+        uses: actions/cache@v4
+        with:
+          path: .github-ci-signing
+          key: oplusbridge-ci-debug-signing-v1
+      - name: Prepare signing
+        run: |
+          set -euo pipefail
+          if [[ -n "${PROJECT_KEYSTORE_BASE64:-}" ]]; then
+            printf '%s' "$PROJECT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/project-signing.jks"
+            echo "OPLUSBAND_KEYSTORE=$RUNNER_TEMP/project-signing.jks" >> "$GITHUB_ENV"
+            echo "OPLUSBAND_STORE_PASSWORD=$PROJECT_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "OPLUSBAND_KEY_ALIAS=$PROJECT_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "OPLUSBAND_KEY_PASSWORD=$PROJECT_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGNING_SOURCE=repository-secrets" >> "$GITHUB_ENV"
+          else
+            mkdir -p .github-ci-signing
+            PASSWORD="OplusBridgeCiDebug-2026"
+            KEYSTORE="$GITHUB_WORKSPACE/.github-ci-signing/ci-debug.jks"
+            if [[ ! -s "$KEYSTORE" ]]; then
+              keytool -genkeypair \
+                -keystore "$KEYSTORE" \
+                -storepass "$PASSWORD" \
+                -keypass "$PASSWORD" \
+                -alias ci-debug \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 3650 \
+                -dname CN=CiDebug \
+                -noprompt
+            fi
+            echo "OPLUSBAND_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
+            echo "OPLUSBAND_STORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+            echo "OPLUSBAND_KEY_ALIAS=ci-debug" >> "$GITHUB_ENV"
+            echo "OPLUSBAND_KEY_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGNING_SOURCE=stable-ci-cache" >> "$GITHUB_ENV"
+          fi
+      - name: Build debug APK
+        run: |
+          echo "APK signing source: $SIGNING_SOURCE"
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleDebug
+      - name: Stage APK and checksum
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          APK="build-artifacts/Miband-OPlusBridge-${GITHUB_SHA::7}-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          sha256sum "$APK" > "$APK.sha256"
+          {
+            echo "source=$SIGNING_SOURCE"
+            keytool -list -v \
+              -keystore "$OPLUSBAND_KEYSTORE" \
+              -storepass "$OPLUSBAND_STORE_PASSWORD" \
+              -alias "$OPLUSBAND_KEY_ALIAS" \
+              | grep -m1 'SHA256:'
+          } > build-artifacts/signing.txt
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Miband-OPlusBridge-debug-${{ github.sha }}
+          path: build-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
