@@ -40,6 +40,22 @@ public final class BandStateRepository {
         }
     }
 
+    /** Stable per-device key used for capability caches. Empty while locked or unregistered. */
+    public String deviceId() {
+        synchronized (STATE_LOCK) {
+            if (!isUnlocked()) return "";
+            return state().getString("deviceId", "");
+        }
+    }
+
+    /** Latest total from 2/1 or 8/47, or -1 when no step value has arrived yet. */
+    public long stepsToday() {
+        synchronized (STATE_LOCK) {
+            if (!isUnlocked()) return -1;
+            return state().getLong("stepsToday", -1);
+        }
+    }
+
     public boolean isRegistered() {
         synchronized (STATE_LOCK) {
             // Credential-encrypted preferences and binding decryption wait until the user is unlocked.
