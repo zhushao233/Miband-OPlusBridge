@@ -196,35 +196,21 @@ public final class MainActivity extends AppCompatActivity {
         screen.caption(links, "在控制中心添加「手环」磁贴，下拉或点按即可连接。");
 
         LinearLayout sleepCard = screen.card();
+        boolean sleepStateUnsupported = BandLiveService.sleepStateUnsupportedForCurrentDevice(this);
+        String sleepPauseCopy = "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。"
+                + "手环支持睡眠状态查询时立即生效，其他型号在下次同步后延迟生效。";
+        if (sleepStateUnsupported) {
+            sleepPauseCopy += "\n当前手环采用同步后延迟生效方式，此开关保持关闭。";
+        }
         MaterialSwitch sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
-                "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。打开开关时如果已经入睡，会在下一次入睡时生效。"
-                        + "此功能使用手环实时睡眠状态判断，并在开启前提示可能影响睡眠图的风险。");
-        sleepPause.setChecked(SleepMusic.enabled(this));
-        sleepPause.setOnCheckedChangeListener((button, checked) -> {
-            if (sleepPauseWriting) return;
-            if (checked) {
-                confirmSleepPause(button);
-            } else {
-                applySleepPause(button, false);
-            }
-        });
-    }
-
-    private void confirmSleepPause(android.widget.CompoundButton toggle) {
-        setSleepPauseChecked(toggle, false);
-        toggle.setEnabled(false);
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("开启后可能影响睡眠图，确定开启？")
-                .setMessage("部分小米手环在同步时会把正在记录的睡眠文件封存，并产生短暂的“清醒”记录。"
-                        + "桥接已改为入睡期间推迟历史同步，手环固件仍按自身规则处理同步边界，这项风险依然存在。"
-                        + "如果睡眠图对你更重要，建议保持关闭。")
-                .setCancelable(false)
-                .setNegativeButton("保持关闭", (dialog, which) -> toggle.setEnabled(true))
-                .setPositiveButton("仍然开启", (dialog, which) -> {
-                    toggle.setEnabled(true);
-                    applySleepPause(toggle, true);
-                })
-                .show();
+                sleepPauseCopy);
+        sleepPause.setChecked(!sleepStateUnsupported && SleepMusic.enabled(this));
+        if (sleepStateUnsupported) {
+            SleepMusic.setEnabled(this, false);
+            sleepPause.setEnabled(false);
+        }
+        sleepPause.setOnCheckedChangeListener((button, checked) ->
+                applySleepPause(button, checked));
     }
 
     private void applySleepPause(android.widget.CompoundButton toggle, boolean enabled) {
