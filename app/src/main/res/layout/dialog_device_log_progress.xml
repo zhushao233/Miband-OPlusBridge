@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -18,17 +19,23 @@
         android:textColor="?attr/colorOnSurface"
         android:textSize="16sp" />
 
-    <FrameLayout
-        android:id="@+id/device_log_progress_host"
+    <com.google.android.material.progressindicator.LinearProgressIndicator
+        android:id="@+id/device_log_progress"
+        style="@style/Widget.Material3Expressive.LinearProgressIndicator.Wavy"
         android:layout_width="match_parent"
-        android:layout_height="12dp"
+        android:layout_height="wrap_content"
         android:layout_marginStart="4dp"
         android:layout_marginEnd="4dp"
-        android:layout_marginBottom="24dp">
-
-        <io.github.miam1ku.mibandoplusbridge.ui.DeviceLogProgressView
-            android:id="@+id/device_log_progress"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-    </FrameLayout>
+        android:layout_marginBottom="24dp"
+        android:indeterminate="true"
+        android:max="100"
+        android:progress="0"
+        app:indicatorColor="?attr/colorPrimary"
+        app:trackColor="?attr/colorSurfaceVariant"
+        app:trackCornerRadius="3dp"
+        app:trackThickness="6dp"
+        app:waveAmplitude="@dimen/device_log_progress_wave_amplitude"
+        app:waveSpeed="@dimen/device_log_progress_wave_speed"
+        app:wavelengthDeterminate="@dimen/device_log_progress_wavelength_determinate"
+        app:wavelengthIndeterminate="36dp" />
 </LinearLayout>

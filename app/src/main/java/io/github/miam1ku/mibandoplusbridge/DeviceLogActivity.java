@@ -11,12 +11,12 @@ import android.os.Looper;
 import android.os.UserManager;
 import android.text.format.DateFormat;
 import android.view.KeyEvent;
-import android.widget.FrameLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.DeviceLogPublisher;
@@ -27,7 +27,6 @@ import io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen;
 import io.github.miam1ku.mibandoplusbridge.ui.Copy;
-import io.github.miam1ku.mibandoplusbridge.ui.DeviceLogProgressView;
 import java.io.File;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,8 +49,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private MaterialButton reconnect;
     private MaterialButton share;
     private android.app.Dialog progressDialog;
-    private FrameLayout progressHost;
-    private DeviceLogProgressView progressBar;
+    private LinearProgressIndicator progressBar;
     private TextView progressStatus;
     private File lastBundle;
     private boolean pulling;
@@ -296,19 +294,19 @@ public final class DeviceLogActivity extends AppCompatActivity {
         int percent = Math.min(100, progress.currentPart() * 100 / progress.totalParts());
         SessionLog.line(this, "UI_LOG_POLL part=" + progress.currentPart()
                 + "/" + progress.totalParts() + " percent=" + percent
-                + " hostChildren=" + (progressHost == null ? -1 : progressHost.getChildCount()));
-        if (progressHost != null && !determinateStarted) {
+                + " view=" + (progressBar == null ? "null" : System.identityHashCode(progressBar)));
+        if (progressBar != null && !determinateStarted) {
             SessionLog.line(this, "UI_LOG_APPLY firstValue percent=" + percent
-                    + " oldChildren=" + progressHost.getChildCount());
-            progressHost.removeAllViews();
-            progressBar = new DeviceLogProgressView(this);
-            progressBar.setProgressCompat(percent, false);
-            progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
+                    + " oldIndeterminate=" + progressBar.isIndeterminate());
+            configureDeterminateWave();
+            progressBar.setIndeterminate(false);
+            progressBar.setMax(100);
+            progressBar.setProgressCompat(0, false);
             determinateStarted = true;
-            SessionLog.line(this, "UI_LOG_APPLY determinateMounted children="
-                    + progressHost.getChildCount()
-                    + " id=" + System.identityHashCode(progressBar));
-        } else if (progressBar != null) {
+            SessionLog.line(this, "UI_LOG_APPLY determinateStarted id="
+                    + System.identityHashCode(progressBar));
+        }
+        if (progressBar != null) {
             progressBar.setProgressCompat(percent, false);
         }
         String text = "正在接收 " + progress.fileName() + "\n"
@@ -323,15 +321,15 @@ public final class DeviceLogActivity extends AppCompatActivity {
         android.view.View content = getLayoutInflater().inflate(
                 R.layout.dialog_device_log_progress, null, false);
         progressStatus = content.findViewById(R.id.device_log_progress_status);
-        progressHost = content.findViewById(R.id.device_log_progress_host);
         progressBar = content.findViewById(R.id.device_log_progress);
+        configureRequestWave();
         progressBar.setIndeterminate(true);
+        progressBar.setMax(100);
         determinateStarted = false;
         progressNullCalls = 0;
         progressValueCalls = 0;
         lastLoggedProgress = -1;
         SessionLog.line(this, "UI_LOG_MODAL open build=" + BuildConfig.VERSION_CODE
-                + " hostChildren=" + progressHost.getChildCount()
                 + " view=" + progressBar.getClass().getName()
                 + " id=" + System.identityHashCode(progressBar));
 
@@ -348,7 +346,6 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private void dismissProgressModal() {
         android.app.Dialog dialog = progressDialog;
         progressDialog = null;
-        progressHost = null;
         progressBar = null;
         progressStatus = null;
         determinateStarted = false;
@@ -359,39 +356,49 @@ public final class DeviceLogActivity extends AppCompatActivity {
         if (percent == null) {
             progressNullCalls++;
             SessionLog.line(this, "UI_LOG_ACTIVITY null calls=" + progressNullCalls
-                    + " hostChildren=" + (progressHost == null ? -1 : progressHost.getChildCount())
                     + " viewId=" + (progressBar == null ? 0 : System.identityHashCode(progressBar)));
             determinateStarted = false;
-            if (progressBar != null) progressBar.setIndeterminate(true);
+            if (progressBar != null) {
+                configureRequestWave();
+                progressBar.setIndeterminate(true);
+            }
             return;
         }
         progressValueCalls++;
-        if (progressHost == null) return;
+        if (progressBar == null) return;
+        int value = Math.max(0, Math.min(100, percent));
         if (!determinateStarted) {
             SessionLog.line(this, "UI_LOG_ACTIVITY firstValue percent=" + percent
                     + " calls=" + progressValueCalls
-                    + " oldChildren=" + progressHost.getChildCount());
-            progressHost.removeAllViews();
-            progressBar = new DeviceLogProgressView(this);
-            progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), false);
-            progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
+                    + " oldIndeterminate=" + progressBar.isIndeterminate());
+            configureDeterminateWave();
+            progressBar.setIndeterminate(false);
+            progressBar.setMax(100);
             determinateStarted = true;
-            SessionLog.line(this, "UI_LOG_ACTIVITY determinateStarted hostChildren="
-                    + progressHost.getChildCount()
+            SessionLog.line(this, "UI_LOG_ACTIVITY determinateStarted "
                     + " view=" + progressBar.getClass().getName()
                     + " id=" + System.identityHashCode(progressBar));
-            return;
         }
-        if (progressBar != null) {
-            progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), false);
-            if (percent == 100 || lastLoggedProgress < 0 || percent >= lastLoggedProgress + 10) {
-                lastLoggedProgress = percent;
-                SessionLog.line(this, "UI_LOG_ACTIVITY value=" + percent
-                        + " calls=" + progressValueCalls
-                        + " hostChildren=" + progressHost.getChildCount()
-                        + " viewId=" + System.identityHashCode(progressBar));
-            }
+        progressBar.setProgressCompat(value, false);
+        if (value == 100 || lastLoggedProgress < 0 || value >= lastLoggedProgress + 10) {
+            lastLoggedProgress = value;
+            SessionLog.line(this, "UI_LOG_ACTIVITY value=" + value
+                    + " calls=" + progressValueCalls
+                    + " viewId=" + System.identityHashCode(progressBar));
         }
+    }
+
+    private void configureRequestWave() {
+        progressBar.setWaveSpeed(0);
+    }
+
+    private void configureDeterminateWave() {
+        progressBar.setWaveAmplitude(getResources().getDimensionPixelSize(
+                R.dimen.device_log_progress_wave_amplitude));
+        progressBar.setWavelengthDeterminate(getResources().getDimensionPixelSize(
+                R.dimen.device_log_progress_wavelength_determinate));
+        progressBar.setWaveSpeed(getResources().getDimensionPixelSize(
+                R.dimen.device_log_progress_wave_speed));
     }
 
     private static String deviceLogFailure(Throwable failure) {
