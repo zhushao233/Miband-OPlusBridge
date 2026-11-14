@@ -56,6 +56,9 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private File lastBundle;
     private boolean pulling;
     private boolean determinateStarted;
+    private long progressNullCalls;
+    private long progressValueCalls;
+    private int lastLoggedProgress = -1;
 
     private final Runnable refreshTick = this::pollState;
     private final ContentObserver stateObserver = new ContentObserver(main) {
@@ -292,6 +295,13 @@ public final class DeviceLogActivity extends AppCompatActivity {
         progressBar = content.findViewById(R.id.device_log_progress);
         progressBar.setIndeterminate(true);
         determinateStarted = false;
+        progressNullCalls = 0;
+        progressValueCalls = 0;
+        lastLoggedProgress = -1;
+        SessionLog.line(this, "UI_LOG_MODAL open build=" + BuildConfig.VERSION_CODE
+                + " hostChildren=" + progressHost.getChildCount()
+                + " view=" + progressBar.getClass().getName()
+                + " id=" + System.identityHashCode(progressBar));
 
         progressDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(BuildConfig.DEBUG
@@ -317,21 +327,40 @@ public final class DeviceLogActivity extends AppCompatActivity {
 
     private void setProgress(Integer percent) {
         if (percent == null) {
+            progressNullCalls++;
+            SessionLog.line(this, "UI_LOG_ACTIVITY null calls=" + progressNullCalls
+                    + " hostChildren=" + (progressHost == null ? -1 : progressHost.getChildCount())
+                    + " viewId=" + (progressBar == null ? 0 : System.identityHashCode(progressBar)));
             determinateStarted = false;
             if (progressBar != null) progressBar.setIndeterminate(true);
             return;
         }
+        progressValueCalls++;
         if (progressHost == null) return;
         if (!determinateStarted) {
+            SessionLog.line(this, "UI_LOG_ACTIVITY firstValue percent=" + percent
+                    + " calls=" + progressValueCalls
+                    + " oldChildren=" + progressHost.getChildCount());
             progressHost.removeAllViews();
             progressBar = new DeviceLogProgressView(this);
             progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), false);
             progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
             determinateStarted = true;
+            SessionLog.line(this, "UI_LOG_ACTIVITY determinateStarted hostChildren="
+                    + progressHost.getChildCount()
+                    + " view=" + progressBar.getClass().getName()
+                    + " id=" + System.identityHashCode(progressBar));
             return;
         }
         if (progressBar != null) {
             progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), false);
+            if (percent == 100 || lastLoggedProgress < 0 || percent >= lastLoggedProgress + 10) {
+                lastLoggedProgress = percent;
+                SessionLog.line(this, "UI_LOG_ACTIVITY value=" + percent
+                        + " calls=" + progressValueCalls
+                        + " hostChildren=" + progressHost.getChildCount()
+                        + " viewId=" + System.identityHashCode(progressBar));
+            }
         }
     }
 
