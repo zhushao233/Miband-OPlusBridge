@@ -588,7 +588,7 @@ public final class OHealthHealthImportHook {
     private void ensureAccount() {
         if (usableAccount(host.account())) return;
         try {
-            Object value = host.accountGetter.invoke(host.companion);
+            Object value = host.accountGetter.invoke(host.accountOwner);
             String account = value instanceof String ? (String) value : null;
             if (!usableAccount(account)) {
                 if (!"OHEALTH_ACCOUNT_UNAVAILABLE".equals(lastFailure)) {
@@ -838,11 +838,12 @@ public final class OHealthHealthImportHook {
 
     /** Resolve the entire supported host surface before subscribing or writing anything. */
     static final class HostContract {
-        final Object companion;
-        final Method accountGetter, apiGetter, read, insert, subscribe, observerResult, observerDispose;
+        final Object accountOwner;
+        final Object apiOwner;
+        final Method accountGetter, apiGetter, read, insert, subscribe;
         final Method readAccount, readStart, readEnd, readDevice, readTable, readType;
         final Method insertTable, insertDatas, errorCode, payload, dispose;
-        final Constructor<?> readConstructor, insertConstructor, observerConstructor;
+        final Constructor<?> readConstructor, insertConstructor;
         final Class<?> observerClass, beanClass;
         final ClassLoader loader;
         final EnumMap<OHealthHealthModels.Kind, OHealthHealthModels> models =
@@ -850,12 +851,48 @@ public final class OHealthHealthImportHook {
 
         HostContract(ClassLoader loader) throws ReflectiveOperationException {
             this.loader = loader;
-            Class<?> owner = Class.forName("com.heytap.device.data.storage.DataRepositoryHelper", false, loader);
-            companion = owner.getField("Companion").get(null);
-            Class<?> companionClass = Class.forName(owner.getName() + "$Companion", false, loader);
-            accountGetter = companionClass.getMethod("getSsoId");
+            Object oldOwner = null;
+            Method oldAccountGetter = null;
+            Method oldApiGetter = null;
+            try {
+                Class<?> old = Class.forName(
+                        "com.heytap.device.data.storage.DataRepositoryHelper", false, loader);
+                oldOwner = old.getField("Companion").get(null);
+                Class<?> companion = Class.forName(old.getName() + "$Companion", false, loader);
+                oldAccountGetter = companion.getMethod("getSsoId");
+                oldApiGetter = companion.getMethod("getDbApi");
+            } catch (ClassNotFoundException | NoSuchFieldException | NoSuchMethodException obsolete) {
+                // OPPO Health 6.10 moved both entry points out of com.heytap.device.
+            }
+            if (oldOwner != null && oldAccountGetter != null && oldApiGetter != null) {
+                accountOwner = oldOwner;
+                accountGetter = oldAccountGetter;
+                apiOwner = oldOwner;
+                apiGetter = oldApiGetter;
+            } else {
+                Object account = null;
+                try {
+                    Class<?> internal = Class.forName(
+                            "com.heytap.health.account.impl.InternalImpl", false, loader);
+                    Object internalInstance = internal.getConstructor().newInstance();
+                    account = internal.getMethod("getAccount").invoke(internalInstance);
+                } catch (ReflectiveOperationException unavailable) {
+                    // Fall through to the singleton manager class used by the same build.
+                }
+                if (account == null) {
+                    Class<?> manager = Class.forName(
+                            "com.heytap.health.account.impl.manager.o", false, loader);
+                    account = manager.getConstructor().newInstance();
+                }
+                if (account == null) throw new NoSuchMethodException("IMPORT_ACCOUNT_CONTRACT");
+                accountOwner = account;
+                accountGetter = account.getClass().getMethod("getSsoid");
+                Class<?> api = Class.forName(
+                        "com.heytap.databaseengine.api.SportHealthDataAPI", false, loader);
+                apiOwner = null;
+                apiGetter = api.getMethod("getInstance");
+            }
             if (accountGetter.getReturnType() != String.class) throw new NoSuchMethodException("IMPORT_ACCOUNT_CONTRACT");
-            apiGetter = companionClass.getMethod("getDbApi");
             Class<?> apiClass = Class.forName("com.heytap.databaseengine.api.ISportHealthDataAPI", false, loader);
             Class<?> readClass = Class.forName("com.heytap.databaseengine.option.DataReadOption", false, loader);
             Class<?> insertClass = Class.forName("com.heytap.databaseengine.option.DataInsertOption", false, loader);
@@ -879,12 +916,6 @@ public final class OHealthHealthImportHook {
             }
             subscribe = observableClass.getMethod("subscribe", observerClass);
             dispose = Class.forName("io.reactivex.rxjava3.disposables.Disposable", false, loader).getMethod("dispose");
-            Class<?> syncClass = Class.forName("com.heytap.device.data.storage.SyncObserver", false, loader);
-            if (!observerClass.isAssignableFrom(syncClass)) throw new NoSuchMethodException("IMPORT_OBSERVER_CONTRACT");
-            observerConstructor = syncClass.getConstructor();
-            observerResult = syncClass.getMethod("result");
-            observerDispose = syncClass.getMethod("dispose");
-            if (observerResult.getReturnType() != boolean.class) throw new NoSuchMethodException("IMPORT_RESULT_CONTRACT");
             beanClass = Class.forName("com.heytap.databaseengine.model.CommonBackBean", false, loader);
             errorCode = beanClass.getMethod("getErrorCode");
             payload = beanClass.getMethod("getObj");
@@ -896,7 +927,7 @@ public final class OHealthHealthImportHook {
 
         volatile String publishedAccount;
         String account() { return publishedAccount; }
-        Object api() throws ReflectiveOperationException { return apiGetter.invoke(companion); }
+        Object api() throws ReflectiveOperationException { return apiGetter.invoke(apiOwner); }
 
         Object insertOption(int table, List<Object> rows) throws ReflectiveOperationException {
             if (rows.isEmpty()) throw new IllegalArgumentException("IMPORT_EMPTY_INSERT");
@@ -907,15 +938,8 @@ public final class OHealthHealthImportHook {
         }
 
         void insert(Object api, Object option) throws ReflectiveOperationException {
-            Object observer = observerConstructor.newInstance();
-            try {
-                subscribe.invoke(insert.invoke(api, option), observer);
-                if (!Boolean.TRUE.equals(observerResult.invoke(observer))) {
-                    throw new IllegalStateException("IMPORT_INSERT_UNCONFIRMED");
-                }
-            } finally {
-                // SyncObserver normally auto-disposes onNext; also release a timed-out subscription.
-                try { observerDispose.invoke(observer); } catch (ReflectiveOperationException ignored) { }
+            if (!awaitWrite(insert.invoke(api, option))) {
+                throw new IllegalStateException("IMPORT_INSERT_UNCONFIRMED");
             }
         }
 
@@ -942,14 +966,8 @@ public final class OHealthHealthImportHook {
             type.getMethod("setStartTime", long.class).invoke(option, Math.max(0, start));
             // end is exclusive. An inclusive host filter would take the next real sample.
             type.getMethod("setEndTime", long.class).invoke(option, end - 1);
-            Object observer = observerConstructor.newInstance();
-            boolean reportedSuccess = false;
-            try {
-                subscribe.invoke(api.getClass().getMethod("deleteSportHealthData", type).invoke(api, option), observer);
-                reportedSuccess = Boolean.TRUE.equals(observerResult.invoke(observer));
-            } finally {
-                try { observerDispose.invoke(observer); } catch (ReflectiveOperationException ignored) { }
-            }
+            boolean reportedSuccess = awaitWrite(
+                    api.getClass().getMethod("deleteSportHealthData", type).invoke(api, option));
             // Table 1001 store.delete returns the deleted row count on this callback, and
             // SyncObserver treats every non-zero value as failure. Wait above, then confirm
             // the window is empty. Sleep 1010, step stat 1002 and stress 1017 inherit
@@ -981,14 +999,8 @@ public final class OHealthHealthImportHook {
             type.getMethod("setSportMode", int.class).invoke(option, mode);
             type.getMethod("setStartTime", long.class).invoke(option, start);
             type.getMethod("setEndTime", long.class).invoke(option, end);
-            Object observer = observerConstructor.newInstance();
-            boolean reportedSuccess = false;
-            try {
-                subscribe.invoke(api.getClass().getMethod("deleteSportHealthData", type).invoke(api, option), observer);
-                reportedSuccess = Boolean.TRUE.equals(observerResult.invoke(observer));
-            } finally {
-                try { observerDispose.invoke(observer); } catch (ReflectiveOperationException ignored) { }
-            }
+            boolean reportedSuccess = awaitWrite(
+                    api.getClass().getMethod("deleteSportHealthData", type).invoke(api, option));
             if (!reportedSuccess) throw new IllegalStateException("HEALTH_DELETE_UNCONFIRMED");
         }
 
@@ -1009,12 +1021,7 @@ public final class OHealthHealthImportHook {
                 type.getMethod("setSyncDataType", int.class).invoke(option, request[0]);
                 type.getMethod("setSyncAction", int.class).invoke(option, request[1]);
                 type.getMethod("setSyncScope", int.class).invoke(option, 1);
-                Object observer = observerConstructor.newInstance();
-                try {
-                    subscribe.invoke(api.getClass().getMethod("synCloud", type).invoke(api, option), observer);
-                } finally {
-                    try { observerDispose.invoke(observer); } catch (ReflectiveOperationException ignored) { }
-                }
+                awaitWrite(api.getClass().getMethod("synCloud", type).invoke(api, option));
             } catch (Throwable failure) {
                 HookRuntime.log("OHEALTH_CLOUD_SYNC_FAILED table=" + table
                         + " " + failure.getClass().getSimpleName());
@@ -1135,6 +1142,50 @@ public final class OHealthHealthImportHook {
             Set<OHealthHealthModels.Point> result = new HashSet<>();
             for (Object row : rows) result.add(model.key(row));
             return result;
+        }
+
+        private boolean awaitWrite(Object observable) throws ReflectiveOperationException {
+            CountDownLatch done = new CountDownLatch(1);
+            AtomicReference<Object> disposable = new AtomicReference<>();
+            AtomicBoolean failed = new AtomicBoolean();
+            AtomicBoolean closed = new AtomicBoolean();
+            Object observer = Proxy.newProxyInstance(loader, new Class<?>[]{observerClass}, (proxy, method, args) -> {
+                switch (method.getName()) {
+                    case "onSubscribe" -> {
+                        disposable.set(args[0]);
+                        if (closed.get()) dispose.invoke(args[0]);
+                    }
+                    case "onNext" -> {
+                        Object value = args[0];
+                        if (value instanceof Throwable) failed.set(true);
+                        if (beanClass.isInstance(value)) {
+                            int code = (Integer) errorCode.invoke(value);
+                            if (code != 0) failed.set(true);
+                        }
+                        done.countDown();
+                    }
+                    case "onError" -> { failed.set(true); done.countDown(); }
+                    case "onComplete" -> done.countDown();
+                    case "equals" -> { return proxy == args[0]; }
+                    case "hashCode" -> { return System.identityHashCode(proxy); }
+                    case "toString" -> { return "OplusBandWriteObserver"; }
+                    default -> throw new UnsupportedOperationException("IMPORT_OBSERVER_METHOD");
+                }
+                return null;
+            });
+            try {
+                subscribe.invoke(observable, observer);
+                try {
+                    return done.await(60, TimeUnit.SECONDS) && !failed.get();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("IMPORT_WRITE_INTERRUPTED");
+                }
+            } finally {
+                closed.set(true);
+                Object subscription = disposable.get();
+                if (subscription != null) dispose.invoke(subscription);
+            }
         }
 
         private Object awaitRead(Object observable) throws Exception {
