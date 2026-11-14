@@ -14,6 +14,7 @@ import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.DeviceLogPublisher;
@@ -45,6 +46,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private MaterialButton pull;
     private MaterialButton reconnect;
     private MaterialButton share;
+    private LinearProgressIndicator progressBar;
     private File lastBundle;
     private boolean pulling;
 
@@ -76,6 +78,17 @@ public final class DeviceLogActivity extends AppCompatActivity {
         reconnect = screen.outlined(operation, "尝试重新连接", this::reconnect);
         share = screen.outlined(operation, "再次分享上次日志", this::shareLast);
         share.setVisibility(android.view.View.GONE);
+        progressBar = new LinearProgressIndicator(this);
+        progressBar.setIndeterminate(true);
+        progressBar.setTrackThickness(BridgeScreen.dp(this, 6));
+        progressBar.setTrackCornerRadius(BridgeScreen.dp(this, 3));
+        progressBar.setContentDescription("设备日志接收进度");
+        progressBar.setVisibility(android.view.View.GONE);
+        android.widget.LinearLayout.LayoutParams progressParams =
+                new android.widget.LinearLayout.LayoutParams(-1, -2);
+        progressParams.topMargin = BridgeScreen.dp(this, 4);
+        progressParams.bottomMargin = BridgeScreen.dp(this, 8);
+        operation.addView(progressBar, progressParams);
         status = screen.bodyText(operation, "有已连接的手环后即可开始。");
 
         getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, stateObserver);
@@ -192,11 +205,13 @@ public final class DeviceLogActivity extends AppCompatActivity {
         pull.setText("正在拉取…");
         reconnect.setVisibility(android.view.View.GONE);
         status.setText("正在请求手环准备完整 log 目录…");
+        setProgress(null);
         SessionLog.start(this);
         BandLiveService.requestDeviceLogExport(this, progress -> main.post(() -> {
             if (isDestroyed() || !pulling) return;
             int percent = progress.totalParts() <= 0 ? 0
                     : Math.min(100, progress.currentPart() * 100 / progress.totalParts());
+            setProgress(percent);
             status.setText("正在接收 " + progress.fileName() + "\n"
                     + progress.currentPart() + "/" + progress.totalParts()
                     + " 片 · " + percent + "% · " + size(progress.bytes()));
@@ -205,42 +220,48 @@ public final class DeviceLogActivity extends AppCompatActivity {
                 showFailure(requestFailure);
                 return;
             }
-            status.setText("手环日志接收完成，正在保存到手机下载目录…");
-            worker.execute(() -> {
-                try {
-                    DeviceLogPublisher.Result published =
-                            DeviceLogPublisher.publish(this, received.file());
-                    main.post(() -> {
-                        if (isDestroyed()) return;
-                        pulling = false;
-                        File shared = published.browseFile() == null
-                                ? received.file() : published.browseFile();
-                        lastBundle = shared;
-                        pull.setText("重新拉取");
-                        share.setVisibility(android.view.View.VISIBLE);
-                        String unpacked = published.extractedFiles() == 0
-                                ? "压缩包已保存。"
-                                : "已展开 " + published.extractedFiles() + " 个文件（"
-                                        + size(published.extractedBytes()) + "），并生成可浏览 ZIP。";
-                        status.setText("已拉取 " + received.fileName() + "（" + size(received.bytes())
-                                + "）。\n保存到 "
-                                + published.relativeDirectory().replaceFirst("^Download/", "下载/")
-                                + "\n" + unpacked);
-                        refreshDevice();
-                        share(shared);
-                    });
-                } catch (Exception failure) {
-                    main.post(() -> {
-                        if (isDestroyed()) return;
-                        pulling = false;
-                        pull.setText("重新拉取");
-                        lastBundle = received.file();
-                        share.setVisibility(android.view.View.VISIBLE);
-                        status.setText("手环日志已收到，但保存到下载目录时中断："
-                                + safeFailure(failure) + "。可先通过下方按钮分享。");
-                        refreshDevice();
-                    });
-                }
+            main.post(() -> {
+                if (isDestroyed()) return;
+                setProgress(100);
+                status.setText("手环日志接收完成，正在保存到手机下载目录…");
+                worker.execute(() -> {
+                    try {
+                        DeviceLogPublisher.Result published =
+                                DeviceLogPublisher.publish(this, received.file());
+                        main.post(() -> {
+                            if (isDestroyed()) return;
+                            pulling = false;
+                            File shared = published.browseFile() == null
+                                    ? received.file() : published.browseFile();
+                            lastBundle = shared;
+                            setProgress(100);
+                            pull.setText("重新拉取");
+                            share.setVisibility(android.view.View.VISIBLE);
+                            String unpacked = published.extractedFiles() == 0
+                                    ? "压缩包已保存。"
+                                    : "已展开 " + published.extractedFiles() + " 个文件（"
+                                            + size(published.extractedBytes()) + "），并生成可浏览 ZIP。";
+                            status.setText("已拉取 " + received.fileName() + "（" + size(received.bytes())
+                                    + "）。\n保存到 "
+                                    + published.relativeDirectory().replaceFirst("^Download/", "下载/")
+                                    + "\n" + unpacked);
+                            refreshDevice();
+                            share(shared);
+                        });
+                    } catch (Exception failure) {
+                        main.post(() -> {
+                            if (isDestroyed()) return;
+                            pulling = false;
+                            setProgress(100);
+                            pull.setText("重新拉取");
+                            lastBundle = received.file();
+                            share.setVisibility(android.view.View.VISIBLE);
+                            status.setText("手环日志已收到，但保存到下载目录时中断："
+                                    + safeFailure(failure) + "。可先通过下方按钮分享。");
+                            refreshDevice();
+                        });
+                    }
+                });
             });
         });
     }
@@ -250,9 +271,20 @@ public final class DeviceLogActivity extends AppCompatActivity {
             if (isDestroyed()) return;
             pulling = false;
             pull.setText("重试拉取");
+            progressBar.setVisibility(android.view.View.GONE);
             status.setText(deviceLogFailure(failure));
             refreshDevice();
         });
+    }
+
+    private void setProgress(Integer percent) {
+        progressBar.setVisibility(android.view.View.VISIBLE);
+        if (percent == null) {
+            progressBar.setIndeterminate(true);
+        } else {
+            progressBar.setIndeterminate(false);
+            progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), true);
+        }
     }
 
     private static String deviceLogFailure(Throwable failure) {
