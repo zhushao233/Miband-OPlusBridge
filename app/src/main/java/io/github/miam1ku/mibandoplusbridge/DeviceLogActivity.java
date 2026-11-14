@@ -4,12 +4,16 @@ package io.github.miam1ku.mibandoplusbridge;
 import android.content.ClipData;
 import android.content.Intent;
 import android.database.ContentObserver;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
 import android.text.format.DateFormat;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -288,6 +292,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
         progressStatus = content.findViewById(R.id.device_log_progress_status);
         waitingProgress = content.findViewById(R.id.device_log_waiting_progress);
         progressBar = content.findViewById(R.id.device_log_receive_progress);
+        progressBar.setProgressDrawable(determinateDrawable());
 
         progressDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle("正在拉取设备日志")
@@ -315,11 +320,35 @@ public final class DeviceLogActivity extends AppCompatActivity {
             return;
         }
         if (progressBar == null) return;
-        if (waitingProgress != null) waitingProgress.setVisibility(android.view.View.GONE);
+        if (waitingProgress != null && waitingProgress.getParent() instanceof android.view.ViewGroup host) {
+            host.removeView(waitingProgress);
+            waitingProgress = null;
+        }
         progressBar.setVisibility(android.view.View.VISIBLE);
         if (progressBar.isIndeterminate()) progressBar.setIndeterminate(false);
         progressBar.setMax(100);
-        progressBar.setProgress(Math.max(0, Math.min(100, percent)), true);
+        progressBar.setProgress(Math.max(0, Math.min(100, percent)), false);
+    }
+
+    private android.graphics.drawable.Drawable determinateDrawable() {
+        int fill = com.google.android.material.color.MaterialColors.getColor(
+                this, com.google.android.material.R.attr.colorPrimary, 0);
+        int track = com.google.android.material.color.MaterialColors.getColor(
+                this, com.google.android.material.R.attr.colorSurfaceVariant, 0);
+        float radius = 6f * getResources().getDisplayMetrics().density;
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(track);
+        background.setCornerRadius(radius);
+        GradientDrawable progress = new GradientDrawable();
+        progress.setColor(fill);
+        progress.setCornerRadius(radius);
+        ClipDrawable clipped = new ClipDrawable(progress, Gravity.START, ClipDrawable.HORIZONTAL);
+        LayerDrawable layers = new LayerDrawable(new android.graphics.drawable.Drawable[]{
+                background, clipped
+        });
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.progress);
+        return layers;
     }
 
     private static String deviceLogFailure(Throwable failure) {
