@@ -29,6 +29,7 @@ public final class BandLiveService extends Service {
     private static final String ACTION_SYNC = "io.github.miam1ku.mibandoplusbridge.SYNC";
     private static final String ACTION_REPAIR = "io.github.miam1ku.mibandoplusbridge.REPAIR";
     private static volatile BandLiveService instance;
+    private static volatile io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive deviceLogReceiver;
     private static volatile boolean diagnosticPaused;
     private volatile java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(0);
     private final java.util.concurrent.CountDownLatch destroyed = new java.util.concurrent.CountDownLatch(1);
@@ -340,9 +341,15 @@ public final class BandLiveService extends Service {
                 };
         var receiver = new io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive(
                 directory, safe);
+        if (deviceLogReceiver != null) {
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("DEVICE_LOG_RECEIVE_ACTIVE"));
+        }
+        deviceLogReceiver = receiver;
         try {
             client.beginDeviceLogReceive(receiver);
         } catch (Exception unavailable) {
+            deviceLogReceiver = null;
             return java.util.concurrent.CompletableFuture.failedFuture(unavailable);
         }
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
@@ -375,8 +382,18 @@ public final class BandLiveService extends Service {
                         }
                     });
                 }).whenComplete((result, error) -> {
+                    deviceLogReceiver = null;
                     if (error != null) client.cancelDeviceLogReceive("DEVICE_LOG_EXPORT_FAILED");
                 });
+    }
+
+    public static io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive.Progress
+            deviceLogProgressSnapshot() {
+        var receiver = deviceLogReceiver;
+        return receiver == null
+                ? new io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive.Progress(
+                        0, 0, "", 0)
+                : receiver.progressSnapshot();
     }
 
     private static String deviceLogStatus(int status) {

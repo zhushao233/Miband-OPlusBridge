@@ -59,8 +59,10 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private long progressNullCalls;
     private long progressValueCalls;
     private int lastLoggedProgress = -1;
+    private int lastProgressPart = -1;
 
     private final Runnable refreshTick = this::pollState;
+    private final Runnable progressPoll = this::pollTransferProgress;
     private final ContentObserver stateObserver = new ContentObserver(main) {
         @Override public void onChange(boolean selfChange) {
             refreshDevice();
@@ -206,20 +208,12 @@ public final class DeviceLogActivity extends AppCompatActivity {
         status.setText("正在请求手环准备完整 log 目录…");
         showProgressModal();
         setProgress(null);
+        lastProgressPart = -1;
+        main.removeCallbacks(progressPoll);
+        main.post(progressPoll);
         SessionLog.start(this);
         BandLiveService.requestDeviceLogExport(this, progress -> main.post(() -> {
-            if (isDestroyed() || !pulling) return;
-            int percent = progress.totalParts() <= 0 ? 0
-                    : Math.min(100, progress.currentPart() * 100 / progress.totalParts());
-            setProgress(percent);
-            if (progressStatus != null) {
-                progressStatus.setText("正在接收 " + progress.fileName() + "\n"
-                        + progress.currentPart() + "/" + progress.totalParts()
-                        + " 片 · " + percent + "% · " + size(progress.bytes()));
-            }
-            status.setText("正在接收 " + progress.fileName() + "\n"
-                    + progress.currentPart() + "/" + progress.totalParts()
-                    + " 片 · " + percent + "% · " + size(progress.bytes()));
+            applyTransferProgress(progress);
         })).whenComplete((received, requestFailure) -> {
             if (requestFailure != null) {
                 showFailure(requestFailure);
@@ -239,6 +233,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                         main.post(() -> {
                             if (isDestroyed()) return;
                             pulling = false;
+                        main.removeCallbacks(progressPoll);
                             File shared = published.browseFile() == null
                                     ? received.file() : published.browseFile();
                             lastBundle = shared;
@@ -261,6 +256,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                         main.post(() -> {
                             if (isDestroyed()) return;
                             pulling = false;
+                            main.removeCallbacks(progressPoll);
                             dismissProgressModal();
                             pull.setText("重新拉取");
                             lastBundle = received.file();
@@ -279,11 +275,34 @@ public final class DeviceLogActivity extends AppCompatActivity {
         main.post(() -> {
             if (isDestroyed()) return;
             pulling = false;
+            main.removeCallbacks(progressPoll);
             pull.setText("重试拉取");
             dismissProgressModal();
             status.setText(deviceLogFailure(failure));
             refreshDevice();
         });
+    }
+
+    private void pollTransferProgress() {
+        if (isDestroyed() || !pulling) return;
+        applyTransferProgress(BandLiveService.deviceLogProgressSnapshot());
+        main.postDelayed(progressPoll, 200);
+    }
+
+    private void applyTransferProgress(XiaomiMassReceive.Progress progress) {
+        if (isDestroyed() || !pulling || progress == null || progress.totalParts() <= 0
+                || progress.currentPart() <= lastProgressPart) return;
+        lastProgressPart = progress.currentPart();
+        int percent = Math.min(100, progress.currentPart() * 100 / progress.totalParts());
+        SessionLog.line(this, "UI_LOG_POLL part=" + progress.currentPart()
+                + "/" + progress.totalParts() + " percent=" + percent
+                + " hostChildren=" + (progressHost == null ? -1 : progressHost.getChildCount()));
+        setProgress(percent);
+        String text = "正在接收 " + progress.fileName() + "\n"
+                + progress.currentPart() + "/" + progress.totalParts()
+                + " 片 · " + percent + "% · " + size(progress.bytes());
+        if (progressStatus != null) progressStatus.setText(text);
+        status.setText(text);
     }
 
     private void showProgressModal() {
@@ -445,6 +464,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
         dismissProgressModal();
         getContentResolver().unregisterContentObserver(stateObserver);
         main.removeCallbacks(refreshTick);
+        main.removeCallbacks(progressPoll);
         worker.shutdown();
         super.onDestroy();
     }

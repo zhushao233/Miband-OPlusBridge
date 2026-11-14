@@ -46,6 +46,7 @@ public final class XiaomiMassReceive implements AutoCloseable {
     private int currentPart;
     private long bytes;
     private boolean complete;
+    private Progress latestProgress = new Progress(0, 0, "", 0);
 
     public XiaomiMassReceive(File directory, Consumer<Progress> progress) {
         this.directory = Objects.requireNonNull(directory, "directory");
@@ -106,7 +107,7 @@ public final class XiaomiMassReceive implements AutoCloseable {
                     }
                     currentPart = current;
                     finishFile();
-                    progress.accept(new Progress(current, total, fileName, bytes));
+                    publishProgress(current, total);
                 }
                 return;
             }
@@ -116,7 +117,7 @@ public final class XiaomiMassReceive implements AutoCloseable {
             bytes += to - from;
             currentPart = current;
             if (bytes > MAX_FILE_BYTES) throw new IOException("MASS_FILE_TOO_LARGE");
-            progress.accept(new Progress(current, total, fileName, bytes));
+            publishProgress(current, total);
         } catch (Exception failure) {
             fail(failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
         }
@@ -153,6 +154,10 @@ public final class XiaomiMassReceive implements AutoCloseable {
         part = null;
         completion.completeExceptionally(new IllegalStateException(
                 code == null || code.isBlank() ? "MASS_RECEIVE_FAILED" : code));
+    }
+
+    public synchronized Progress progressSnapshot() {
+        return latestProgress;
     }
 
     public Result await(long timeout, TimeUnit unit) throws Exception {
@@ -192,5 +197,11 @@ public final class XiaomiMassReceive implements AutoCloseable {
                 | ((data[offset + 1] & 0xff) << 8)
                 | ((data[offset + 2] & 0xff) << 16)
                 | ((data[offset + 3] & 0xff) << 24);
+    }
+
+    private void publishProgress(int current, int total) {
+        Progress snapshot = new Progress(current, total, fileName, bytes);
+        latestProgress = snapshot;
+        progress.accept(snapshot);
     }
 }
