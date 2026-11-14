@@ -12,6 +12,7 @@ import android.os.Looper;
 import android.os.UserManager;
 import android.text.format.DateFormat;
 import android.view.KeyEvent;
+import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
@@ -50,6 +51,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private MaterialButton reconnect;
     private MaterialButton share;
     private android.app.Dialog progressDialog;
+    private FrameLayout progressHost;
     private ProgressBar progressBar;
     private TextView progressStatus;
     private File lastBundle;
@@ -299,23 +301,14 @@ public final class DeviceLogActivity extends AppCompatActivity {
         statusParams.bottomMargin = BridgeScreen.dp(this, 16);
         content.addView(progressStatus, statusParams);
 
-        progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progressBar.setIndeterminate(true);
-        progressBar.setMax(100);
-        progressBar.setProgress(0, false);
-        progressBar.setProgressTintList(ColorStateList.valueOf(
-                com.google.android.material.color.MaterialColors.getColor(
-                        this, com.google.android.material.R.attr.colorPrimary, 0)));
-        progressBar.setProgressBackgroundTintList(ColorStateList.valueOf(
-                com.google.android.material.color.MaterialColors.getColor(
-                        this, com.google.android.material.R.attr.colorSurfaceVariant, 0)));
-        progressBar.setContentDescription("设备日志接收进度");
+        progressHost = new FrameLayout(this);
         android.widget.LinearLayout.LayoutParams progressParams =
                 new android.widget.LinearLayout.LayoutParams(-1, BridgeScreen.dp(this, 12));
         progressParams.leftMargin = BridgeScreen.dp(this, 4);
         progressParams.rightMargin = BridgeScreen.dp(this, 4);
         progressParams.bottomMargin = BridgeScreen.dp(this, 24);
-        content.addView(progressBar, progressParams);
+        content.addView(progressHost, progressParams);
+        showWaitingProgress();
 
         progressDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle("正在拉取设备日志")
@@ -330,27 +323,50 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private void dismissProgressModal() {
         android.app.Dialog dialog = progressDialog;
         progressDialog = null;
+        progressHost = null;
         progressBar = null;
         progressStatus = null;
         if (dialog != null && dialog.isShowing()) dialog.dismiss();
     }
 
     private void setProgress(Integer percent) {
-        ProgressBar bar = progressBar;
-        if (bar == null) return;
         if (percent == null) {
-            if (!bar.isIndeterminate()) {
-                bar.setIndeterminate(true);
-                bar.setProgress(0, false);
-            }
+            showWaitingProgress();
             return;
         }
-        if (bar.isIndeterminate()) {
-            bar.setIndeterminate(false);
-            bar.setMax(100);
-            bar.setProgress(0, false);
+        if (progressHost == null) return;
+        if (progressBar == null || progressBar.isIndeterminate()) {
+            progressHost.removeAllViews();
+            progressBar = createProgress(false);
+            progressBar.setMax(100);
+            progressBar.setProgress(0, false);
+            progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
         }
-        bar.setProgress(Math.max(0, Math.min(100, percent)), true);
+        progressBar.setProgress(Math.max(0, Math.min(100, percent)), true);
+    }
+
+    private void showWaitingProgress() {
+        if (progressHost == null) return;
+        if (progressBar != null && progressBar.isIndeterminate()) return;
+        progressHost.removeAllViews();
+        progressBar = createProgress(true);
+        progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private ProgressBar createProgress(boolean indeterminate) {
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setIndeterminate(indeterminate);
+        bar.setIndeterminateTintList(ColorStateList.valueOf(
+                com.google.android.material.color.MaterialColors.getColor(
+                        this, com.google.android.material.R.attr.colorPrimary, 0)));
+        bar.setProgressTintList(ColorStateList.valueOf(
+                com.google.android.material.color.MaterialColors.getColor(
+                        this, com.google.android.material.R.attr.colorPrimary, 0)));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(
+                com.google.android.material.color.MaterialColors.getColor(
+                        this, com.google.android.material.R.attr.colorSurfaceVariant, 0)));
+        bar.setContentDescription(indeterminate ? "正在等待手环准备日志" : "设备日志接收进度");
+        return bar;
     }
 
     private static String deviceLogFailure(Throwable failure) {
