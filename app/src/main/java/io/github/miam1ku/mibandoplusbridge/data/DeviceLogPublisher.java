@@ -176,9 +176,13 @@ public final class DeviceLogPublisher {
         return copied;
     }
 
-    private static String safeEntryName(String raw) {
+    static String safeEntryName(String raw) {
         if (raw == null || raw.isBlank()) return null;
-        String value = raw.replace('\\', '/').replaceAll("[\\p{Cntrl}]", "");
+        String value = raw.replace('\\', '/').replaceAll("[\\p{Cntrl}]", "")
+                .replaceFirst("^/+", "");
+        for (String segment : value.split("/")) {
+            if ("..".equals(segment)) return null;
+        }
         Path path = Paths.get(value).normalize();
         if (path.isAbsolute() || path.startsWith("..")) return null;
         String clean = path.toString().replace('\\', '/');
