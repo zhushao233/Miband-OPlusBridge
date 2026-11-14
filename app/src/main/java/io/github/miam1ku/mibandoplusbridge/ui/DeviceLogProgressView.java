@@ -110,7 +110,12 @@ public final class DeviceLogProgressView extends View {
     }
 
     private void cancelWaiting() {
-        if (waitingAnimator != null) waitingAnimator.cancel();
+        ValueAnimator animator = waitingAnimator;
+        waitingAnimator = null;
+        if (animator != null) {
+            animator.removeAllUpdateListeners();
+            animator.cancel();
+        }
     }
 
     private float dp(float value) {
