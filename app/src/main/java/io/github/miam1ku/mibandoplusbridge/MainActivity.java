@@ -91,6 +91,7 @@ public final class MainActivity extends AppCompatActivity {
     // advanced
     private LinearLayout bonded;
     private TextView status;
+    private TextView deviceLogHint;
     private Button open;
     private Button advancedRestore;
 
@@ -267,6 +268,8 @@ public final class MainActivity extends AppCompatActivity {
 
         LinearLayout debug = screen.card(advanced);
         screen.overline(debug, "调试");
+        screen.navRow(debug, "拉取设备日志", () -> startActivity(new Intent(this, DeviceLogActivity.class)));
+        deviceLogHint = screen.caption(debug, "连接手环后可拉取设备日志");
         screen.navRow(debug, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
         if (BuildConfig.DEBUG) {
             screen.navRow(debug, "独立连接诊断", () -> startActivity(new Intent(this, DiagnosticActivity.class)));
@@ -747,6 +750,7 @@ public final class MainActivity extends AppCompatActivity {
             deviceName.setText("小米手环");
             screen.setChip(statusChip, "解锁后显示", Tone.NEUTRAL);
             setOptionalCaption(connectionHint, "解锁手机后显示手环信息。");
+            setDeviceLogHint("解锁后查看设备日志");
             metricsLine.setVisibility(View.GONE);
             healthLine.setVisibility(View.GONE);
             return;
@@ -760,9 +764,11 @@ public final class MainActivity extends AppCompatActivity {
             if (connected) {
                 screen.setChip(statusChip, "已连接", Tone.POSITIVE);
                 setOptionalCaption(connectionHint, "");
+                setDeviceLogHint("已连接 · 可拉取本次设备会话日志");
             } else {
                 screen.setChip(statusChip, "等待连接", Tone.NEUTRAL);
                 setOptionalCaption(connectionHint, Copy.offlineReason(liveStatus()));
+                setDeviceLogHint("连接手环后可拉取设备日志");
             }
             setOptionalCaption(metricsLine, metricsText(state));
             setOptionalCaption(healthLine, healthExtras());
@@ -770,6 +776,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         deviceName.setText("小米手环");
         screen.setChip(statusChip, "待添加", Tone.NEUTRAL);
+        setDeviceLogHint("连接手环后可拉取设备日志");
         setOptionalCaption(connectionHint, "");
         healthLine.setVisibility(View.GONE);
         try {
@@ -818,6 +825,12 @@ public final class MainActivity extends AppCompatActivity {
         boolean show = value != null && !value.isBlank();
         view.setVisibility(show ? View.VISIBLE : View.GONE);
         view.setText(show ? value : "");
+    }
+
+    private void setDeviceLogHint(String value) {
+        if (deviceLogHint == null) return;
+        deviceLogHint.setText(value);
+        deviceLogHint.setVisibility(View.VISIBLE);
     }
 
     private static String safeIdentity(String value, String fallback) {
