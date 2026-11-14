@@ -213,19 +213,21 @@ public final class DeviceLogActivity extends AppCompatActivity {
                     main.post(() -> {
                         if (isDestroyed()) return;
                         pulling = false;
-                        lastBundle = received.file();
+                        File shared = published.browseFile() == null
+                                ? received.file() : published.browseFile();
+                        lastBundle = shared;
                         pull.setText("重新拉取");
                         share.setVisibility(android.view.View.VISIBLE);
                         String unpacked = published.extractedFiles() == 0
                                 ? "压缩包已保存。"
                                 : "已展开 " + published.extractedFiles() + " 个文件（"
-                                        + size(published.extractedBytes()) + "）。";
+                                        + size(published.extractedBytes()) + "），并生成可浏览 ZIP。";
                         status.setText("已拉取 " + received.fileName() + "（" + size(received.bytes())
                                 + "）。\n保存到 "
                                 + published.relativeDirectory().replaceFirst("^Download/", "下载/")
                                 + "\n" + unpacked);
                         refreshDevice();
-                        share(received.file());
+                        share(shared);
                     });
                 } catch (Exception failure) {
                     main.post(() -> {

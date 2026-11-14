@@ -18,7 +18,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
@@ -33,8 +37,8 @@ public final class DeviceLogPublisher {
     private static final DateTimeFormatter FOLDER_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT);
 
-    public record Result(Uri archiveUri, String relativeDirectory, String archiveName,
-                         int extractedFiles, long extractedBytes) {}
+    public record Result(File browseFile, Uri browseUri, Uri archiveUri, String relativeDirectory,
+                         String archiveName, int extractedFiles, long extractedBytes) {}
 
     private enum ArchiveType { ZIP, TAR, GZIP_TAR, UNKNOWN }
 
@@ -52,24 +56,43 @@ public final class DeviceLogPublisher {
 
         int files = 0;
         long bytes = 0;
+        File browseFile = null;
+        Uri browseUri = null;
         try {
             if (type != ArchiveType.UNKNOWN) {
-                ExtractCount count = extract(context, source, type, relative);
+                browseFile = new File(source.getParentFile(), browseName(source.getName()));
+                ExtractCount count = extract(context, source, type, relative, browseFile);
                 files = count.files;
                 bytes = count.bytes;
+                if (files > 0 && browseFile.isFile() && browseFile.length() > 0) {
+                    browseUri = copyToDownloads(context, browseFile, relative,
+                            browseFile.getName(), "application/zip");
+                } else {
+                    browseFile.delete();
+                    browseFile = null;
+                }
             }
         } catch (Exception ignored) {
             // The original archive is still complete and shareable; extraction is best effort.
+            if (browseFile != null) browseFile.delete();
+            browseFile = null;
+            browseUri = null;
+            files = 0;
+            bytes = 0;
         }
-        return new Result(archiveUri, relative, archiveName, files, bytes);
+        return new Result(browseFile, browseUri, archiveUri, relative,
+                archiveName, files, bytes);
     }
 
     private static ExtractCount extract(Context context, File source, ArchiveType type,
-            String relativeRoot) throws Exception {
+            String relativeRoot, File browseFile) throws Exception {
         try (BufferedInputStream buffered = new BufferedInputStream(new FileInputStream(source), 64 * 1024);
-             ArchiveInputStream archive = archive(buffered, type)) {
+             ArchiveInputStream archive = archive(buffered, type);
+             ZipOutputStream normalized = new ZipOutputStream(
+                     new java.io.BufferedOutputStream(new java.io.FileOutputStream(browseFile), 64 * 1024))) {
             int files = 0;
             long bytes = 0;
+            Set<String> normalizedNames = new HashSet<>();
             ArchiveEntry entry;
             while ((entry = archive.getNextEntry()) != null) {
                 if (files >= MAX_EXTRACTED_FILES || bytes >= MAX_EXTRACTED_BYTES) break;
@@ -81,11 +104,14 @@ public final class DeviceLogPublisher {
                 String parent = path.getParent() == null
                         ? "" : path.getParent().toString().replace('\\', '/') + "/";
                 String display = path.getFileName().toString();
+                String normalizedName = uniqueEntry(safe, normalizedNames);
                 Uri uri = createDownload(context, relativeRoot + parent, display,
                         mimeFromName(display));
                 try (OutputStream out = context.getContentResolver().openOutputStream(uri, "w")) {
                     if (out == null) throw new IOException("DEVICE_LOG_STORAGE_FAILED");
-                    long copied = copyLimited(archive, out, MAX_EXTRACTED_BYTES - bytes);
+                    normalized.putNextEntry(new ZipEntry(normalizedName));
+                    long copied = copyLimited(archive, out, normalized, MAX_EXTRACTED_BYTES - bytes);
+                    normalized.closeEntry();
                     bytes += copied;
                     files++;
                 } catch (Exception failure) {
@@ -159,14 +185,15 @@ public final class DeviceLogPublisher {
         context.getContentResolver().update(uri, values, null, null);
     }
 
-    private static long copyLimited(InputStream input, OutputStream output, long remaining)
-            throws IOException {
+    private static long copyLimited(InputStream input, OutputStream output,
+            ZipOutputStream normalized, long remaining) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         long copied = 0;
         while (remaining > 0) {
             int count = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
             if (count < 0) break;
             output.write(buffer, 0, count);
+            normalized.write(buffer, 0, count);
             copied += count;
             remaining -= count;
         }
@@ -197,6 +224,31 @@ public final class DeviceLogPublisher {
         }
         if (type == ArchiveType.ZIP && !lower.endsWith(".zip")) return name + ".zip";
         return name;
+    }
+
+    private static String browseName(String source) {
+        String lower = source.toLowerCase(Locale.ROOT);
+        String base = lower.endsWith(".tar.gz") ? source.substring(0, source.length() - 7)
+                : lower.endsWith(".tgz") ? source.substring(0, source.length() - 4)
+                : lower.endsWith(".gz") ? source.substring(0, source.length() - 3)
+                : lower.endsWith(".tar") ? source.substring(0, source.length() - 4)
+                : source;
+        return base + "-browse.zip";
+    }
+
+    private static String uniqueEntry(String path, Set<String> used) {
+        if (used.add(path)) return path;
+        int slash = path.lastIndexOf('/');
+        int dot = path.lastIndexOf('.');
+        String parent = slash >= 0 ? path.substring(0, slash + 1) : "";
+        String name = slash >= 0 ? path.substring(slash + 1) : path;
+        int suffix = dot > slash ? dot - slash - 1 : name.length();
+        String stem = name.substring(0, suffix);
+        String extension = name.substring(suffix);
+        for (int index = 2; ; index++) {
+            String candidate = parent + stem + "-" + index + extension;
+            if (used.add(candidate)) return candidate;
+        }
     }
 
     private static String mime(ArchiveType type, String fileName) {
