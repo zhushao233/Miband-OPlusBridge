@@ -164,7 +164,7 @@ public final class MainActivity extends AppCompatActivity {
         stepImport = screen.stepRow(setupCard, 2, "导入绑定", StepState.LATER);
         stepAdd = screen.stepRow(setupCard, 3, "添加到健康", StepState.LATER);
         primaryHint = screen.caption(setupCard, "");
-        openKsu = screen.outlined(setupCard, "打开 KernelSU", this::openKernelSu);
+        openKsu = screen.outlined(setupCard, "打开 Root 管理器", this::openKernelSu);
         LinearLayout prereq = screen.expander(setupCard, "开始前准备", null);
         screen.caption(prereq, Copy.SETUP_PREREQ);
     }
@@ -269,7 +269,6 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout debug = screen.card(advanced);
         screen.overline(debug, "调试");
         screen.navRow(debug, "拉取设备日志", () -> startActivity(new Intent(this, DeviceLogActivity.class)));
-        deviceLogHint = screen.caption(debug, "连接手环后可拉取设备日志");
         screen.navRow(debug, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
         if (BuildConfig.DEBUG) {
             screen.navRow(debug, "独立连接诊断", () -> startActivity(new Intent(this, DiagnosticActivity.class)));
@@ -431,14 +430,14 @@ public final class MainActivity extends AppCompatActivity {
     private void requestRoot() {
         if (worker.isShutdown() || probingRoot || changingOwnership) return;
         probingRoot = true;
-        ownershipStatus.setText("正在检查 KernelSU 授权…");
+        ownershipStatus.setText("正在检查 Root 授权…");
         worker.execute(() -> {
             boolean granted = new OwnershipController(this).probeRoot();
             main.post(() -> {
                 if (isDestroyed()) return;
                 probingRoot = false;
                 rootGranted = granted;
-                ownershipStatus.setText(granted ? "KernelSU 已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
+                ownershipStatus.setText(granted ? "Root 权限已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
                 updateControls();
                 refreshDevice();
                 if (granted) continueInit();
@@ -449,7 +448,7 @@ public final class MainActivity extends AppCompatActivity {
     private void openKernelSu() {
         Intent launch = getPackageManager().getLaunchIntentForPackage("me.weishu.kernelsu");
         if (launch == null) {
-            ownershipStatus.setText("安装 KernelSU 管理器后，为本应用打开超级用户。");
+            ownershipStatus.setText("安装 Root 管理器后，为本应用打开超级用户。");
             return;
         }
         startActivity(launch);
@@ -764,11 +763,9 @@ public final class MainActivity extends AppCompatActivity {
             if (connected) {
                 screen.setChip(statusChip, "已连接", Tone.POSITIVE);
                 setOptionalCaption(connectionHint, "");
-                setDeviceLogHint("已连接 · 可拉取本次设备会话日志");
             } else {
                 screen.setChip(statusChip, "等待连接", Tone.NEUTRAL);
                 setOptionalCaption(connectionHint, Copy.offlineReason(liveStatus()));
-                setDeviceLogHint("连接手环后可拉取设备日志");
             }
             setOptionalCaption(metricsLine, metricsText(state));
             setOptionalCaption(healthLine, healthExtras());
@@ -776,7 +773,6 @@ public final class MainActivity extends AppCompatActivity {
         }
         deviceName.setText("小米手环");
         screen.setChip(statusChip, "待添加", Tone.NEUTRAL);
-        setDeviceLogHint("连接手环后可拉取设备日志");
         setOptionalCaption(connectionHint, "");
         healthLine.setVisibility(View.GONE);
         try {
