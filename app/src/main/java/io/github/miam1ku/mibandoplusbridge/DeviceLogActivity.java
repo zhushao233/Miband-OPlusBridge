@@ -11,6 +11,7 @@ import android.os.Looper;
 import android.os.UserManager;
 import android.text.format.DateFormat;
 import android.view.KeyEvent;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
@@ -49,10 +50,12 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private MaterialButton reconnect;
     private MaterialButton share;
     private android.app.Dialog progressDialog;
+    private FrameLayout progressHost;
     private DeviceLogProgressView progressBar;
     private TextView progressStatus;
     private File lastBundle;
     private boolean pulling;
+    private boolean determinateStarted;
 
     private final Runnable refreshTick = this::pollState;
     private final ContentObserver stateObserver = new ContentObserver(main) {
@@ -285,8 +288,10 @@ public final class DeviceLogActivity extends AppCompatActivity {
         android.view.View content = getLayoutInflater().inflate(
                 R.layout.dialog_device_log_progress, null, false);
         progressStatus = content.findViewById(R.id.device_log_progress_status);
+        progressHost = content.findViewById(R.id.device_log_progress_host);
         progressBar = content.findViewById(R.id.device_log_progress);
         progressBar.setIndeterminate(true);
+        determinateStarted = false;
 
         progressDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(BuildConfig.DEBUG
@@ -303,19 +308,31 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private void dismissProgressModal() {
         android.app.Dialog dialog = progressDialog;
         progressDialog = null;
+        progressHost = null;
         progressBar = null;
         progressStatus = null;
+        determinateStarted = false;
         if (dialog != null && dialog.isShowing()) dialog.dismiss();
     }
 
     private void setProgress(Integer percent) {
         if (percent == null) {
+            determinateStarted = false;
             if (progressBar != null) progressBar.setIndeterminate(true);
             return;
         }
-        if (progressBar == null) return;
-        progressBar.setIndeterminate(false);
-        progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), true);
+        if (progressHost == null) return;
+        if (!determinateStarted) {
+            progressHost.removeAllViews();
+            progressBar = new DeviceLogProgressView(this);
+            progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), false);
+            progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
+            determinateStarted = true;
+            return;
+        }
+        if (progressBar != null) {
+            progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), false);
+        }
     }
 
     private static String deviceLogFailure(Throwable failure) {

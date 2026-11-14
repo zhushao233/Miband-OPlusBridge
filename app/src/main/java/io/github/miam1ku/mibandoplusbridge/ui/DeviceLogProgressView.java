@@ -16,6 +16,7 @@ public final class DeviceLogProgressView extends View {
     private final RectF rect = new RectF();
     private ValueAnimator waitingAnimator;
     private boolean indeterminate = true;
+    private boolean determinateOnly;
     private int progress;
 
     public DeviceLogProgressView(Context context) {
@@ -35,6 +36,7 @@ public final class DeviceLogProgressView extends View {
     }
 
     public void setIndeterminate(boolean value) {
+        if (value && determinateOnly) return;
         if (indeterminate == value) {
             if (value) startAnimationIfAttached();
             return;
@@ -49,6 +51,7 @@ public final class DeviceLogProgressView extends View {
     }
 
     public void setProgressCompat(int value, boolean animated) {
+        determinateOnly = true;
         indeterminate = false;
         cancelWaiting();
         progress = Math.max(0, Math.min(100, value));
@@ -63,7 +66,7 @@ public final class DeviceLogProgressView extends View {
 
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        if (indeterminate) startAnimationIfAttached();
+        if (indeterminate && !determinateOnly) startAnimationIfAttached();
     }
 
     @Override protected void onDetachedFromWindow() {
@@ -98,7 +101,7 @@ public final class DeviceLogProgressView extends View {
     }
 
     private void startAnimationIfAttached() {
-        if (!isAttachedToWindow()) return;
+        if (determinateOnly || !isAttachedToWindow()) return;
         if (waitingAnimator == null) {
             waitingAnimator = ValueAnimator.ofFloat(0f, 1f);
             waitingAnimator.setDuration(1_100);
