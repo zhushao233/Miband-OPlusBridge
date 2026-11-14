@@ -3,16 +3,19 @@ package io.github.miam1ku.mibandoplusbridge;
 
 import android.content.ClipData;
 import android.content.Intent;
+import android.animation.ValueAnimator;
 import android.database.ContentObserver;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
 import android.text.format.DateFormat;
-import android.content.res.ColorStateList;
 import android.view.KeyEvent;
-import android.widget.ProgressBar;
+import android.view.View;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
@@ -50,8 +53,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private MaterialButton reconnect;
     private MaterialButton share;
     private android.app.Dialog progressDialog;
-    private ProgressBar waitingProgress;
-    private ProgressBar progressBar;
+    private TransferProgressView progressBar;
     private TextView progressStatus;
     private File lastBundle;
     private boolean pulling;
@@ -287,7 +289,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
         android.widget.LinearLayout content = new android.widget.LinearLayout(this);
         content.setOrientation(android.widget.LinearLayout.VERTICAL);
         int pad = BridgeScreen.dp(this, 24);
-        content.setPadding(pad, BridgeScreen.dp(this, 4), pad, BridgeScreen.dp(this, 4));
+        content.setPadding(pad, BridgeScreen.dp(this, 8), pad, BridgeScreen.dp(this, 24));
 
         progressStatus = new TextView(this);
         progressStatus.setText("正在请求手环准备完整 log 目录…");
@@ -300,16 +302,15 @@ public final class DeviceLogActivity extends AppCompatActivity {
         statusParams.bottomMargin = BridgeScreen.dp(this, 16);
         content.addView(progressStatus, statusParams);
 
-        waitingProgress = horizontalProgress(true);
-        waitingProgress.setContentDescription("正在等待手环准备日志");
-        addProgress(content, waitingProgress);
-
-        progressBar = horizontalProgress(false);
-        progressBar.setMax(100);
-        progressBar.setProgress(0, false);
+        progressBar = new TransferProgressView(this);
         progressBar.setContentDescription("设备日志接收进度");
-        progressBar.setVisibility(android.view.View.GONE);
-        addProgress(content, progressBar);
+        progressBar.startWaiting();
+        android.widget.LinearLayout.LayoutParams progressParams =
+                new android.widget.LinearLayout.LayoutParams(-1, BridgeScreen.dp(this, 12));
+        progressParams.leftMargin = BridgeScreen.dp(this, 4);
+        progressParams.rightMargin = BridgeScreen.dp(this, 4);
+        progressParams.bottomMargin = BridgeScreen.dp(this, 8);
+        content.addView(progressBar, progressParams);
 
         progressDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle("正在拉取设备日志")
@@ -324,44 +325,88 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private void dismissProgressModal() {
         android.app.Dialog dialog = progressDialog;
         progressDialog = null;
-        waitingProgress = null;
         progressBar = null;
         progressStatus = null;
         if (dialog != null && dialog.isShowing()) dialog.dismiss();
     }
 
     private void setProgress(Integer percent) {
-        ProgressBar bar = progressBar;
-        ProgressBar waiting = waitingProgress;
+        TransferProgressView bar = progressBar;
         if (bar == null) return;
-        if (percent == null) {
-            if (waiting != null) waiting.setVisibility(android.view.View.VISIBLE);
-            bar.setVisibility(android.view.View.GONE);
-        } else {
-            if (waiting != null) waiting.setVisibility(android.view.View.GONE);
-            bar.setVisibility(android.view.View.VISIBLE);
-            bar.setProgress(Math.max(0, Math.min(100, percent)), true);
+        if (percent == null) bar.startWaiting();
+        else bar.setPercent(percent);
+    }
+
+    /** App-controlled progress avoids framework indeterminate/determinate drawable state bugs. */
+    private static final class TransferProgressView extends View {
+        private final Paint track = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private ValueAnimator waiting;
+        private boolean indeterminate = true;
+        private int percent;
+
+        TransferProgressView(android.content.Context context) {
+            super(context);
+            track.setColor(com.google.android.material.color.MaterialColors.getColor(
+                    context, com.google.android.material.R.attr.colorSurfaceVariant, 0));
+            fill.setColor(com.google.android.material.color.MaterialColors.getColor(
+                    context, com.google.android.material.R.attr.colorPrimary, 0));
         }
-    }
 
-    private ProgressBar horizontalProgress(boolean indeterminate) {
-        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setIndeterminate(indeterminate);
-        bar.setProgressTintList(ColorStateList.valueOf(
-                com.google.android.material.color.MaterialColors.getColor(
-                        this, com.google.android.material.R.attr.colorPrimary, 0)));
-        bar.setProgressBackgroundTintList(ColorStateList.valueOf(
-                com.google.android.material.color.MaterialColors.getColor(
-                        this, com.google.android.material.R.attr.colorSurfaceVariant, 0)));
-        return bar;
-    }
+        void startWaiting() {
+            indeterminate = true;
+            if (waiting == null) {
+                waiting = ValueAnimator.ofFloat(0f, 1f);
+                waiting.setDuration(1_100);
+                waiting.setRepeatCount(ValueAnimator.INFINITE);
+                waiting.setRepeatMode(ValueAnimator.REVERSE);
+                waiting.addUpdateListener(value -> invalidate());
+            }
+            if (isAttachedToWindow() && !waiting.isStarted()) waiting.start();
+            invalidate();
+        }
 
-    private void addProgress(android.widget.LinearLayout content, ProgressBar bar) {
-        android.widget.LinearLayout.LayoutParams params =
-                new android.widget.LinearLayout.LayoutParams(-1, BridgeScreen.dp(this, 12));
-        params.leftMargin = BridgeScreen.dp(this, 4);
-        params.rightMargin = BridgeScreen.dp(this, 4);
-        content.addView(bar, params);
+        void setPercent(int value) {
+            indeterminate = false;
+            if (waiting != null) waiting.cancel();
+            percent = Math.max(0, Math.min(100, value));
+            invalidate();
+        }
+
+        @Override protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            if (indeterminate) startWaiting();
+        }
+
+        @Override protected void onDetachedFromWindow() {
+            if (waiting != null) waiting.cancel();
+            super.onDetachedFromWindow();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float height = getHeight();
+            if (height <= 0 || getWidth() <= 0) return;
+            float barHeight = Math.min(height, BridgeScreen.dp(getContext(), 8));
+            float top = (height - barHeight) / 2f;
+            float radius = barHeight / 2f;
+            rect.set(0, top, getWidth(), top + barHeight);
+            canvas.drawRoundRect(rect, radius, radius, track);
+
+            if (indeterminate) {
+                float segment = getWidth() * 0.26f;
+                float travel = Math.max(0, getWidth() - segment);
+                float phase = waiting == null ? 0f : waiting.getAnimatedFraction();
+                float left = travel * phase;
+                rect.set(left, top, left + segment, top + barHeight);
+            } else {
+                float right = getWidth() * percent / 100f;
+                if (right <= 0) return;
+                rect.set(0, top, Math.max(barHeight, right), top + barHeight);
+            }
+            canvas.drawRoundRect(rect, radius, radius, fill);
+        }
     }
 
     private static String deviceLogFailure(Throwable failure) {
