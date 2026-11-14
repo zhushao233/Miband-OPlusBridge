@@ -10,10 +10,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
 import android.text.format.DateFormat;
+import android.view.KeyEvent;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
@@ -29,7 +31,7 @@ import java.io.File;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Pulls the current band-session evidence into one shareable archive. */
+/** Pulls the band's complete device-log bundle with a blocking progress modal. */
 public final class DeviceLogActivity extends AppCompatActivity {
     private static final long REFRESH_MS = 2_000;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
@@ -46,7 +48,10 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private MaterialButton pull;
     private MaterialButton reconnect;
     private MaterialButton share;
+    private android.app.Dialog progressDialog;
+    private LinearProgressIndicator waitingProgress;
     private LinearProgressIndicator progressBar;
+    private TextView progressStatus;
     private File lastBundle;
     private boolean pulling;
 
@@ -78,17 +83,6 @@ public final class DeviceLogActivity extends AppCompatActivity {
         reconnect = screen.outlined(operation, "尝试重新连接", this::reconnect);
         share = screen.outlined(operation, "再次分享上次日志", this::shareLast);
         share.setVisibility(android.view.View.GONE);
-        progressBar = new LinearProgressIndicator(this);
-        progressBar.setIndeterminate(true);
-        progressBar.setTrackThickness(BridgeScreen.dp(this, 6));
-        progressBar.setTrackCornerRadius(BridgeScreen.dp(this, 3));
-        progressBar.setContentDescription("设备日志接收进度");
-        progressBar.setVisibility(android.view.View.GONE);
-        android.widget.LinearLayout.LayoutParams progressParams =
-                new android.widget.LinearLayout.LayoutParams(-1, -2);
-        progressParams.topMargin = BridgeScreen.dp(this, 4);
-        progressParams.bottomMargin = BridgeScreen.dp(this, 8);
-        operation.addView(progressBar, progressParams);
         status = screen.bodyText(operation, "有已连接的手环后即可开始。");
 
         getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, stateObserver);
@@ -205,6 +199,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
         pull.setText("正在拉取…");
         reconnect.setVisibility(android.view.View.GONE);
         status.setText("正在请求手环准备完整 log 目录…");
+        showProgressModal();
         setProgress(null);
         SessionLog.start(this);
         BandLiveService.requestDeviceLogExport(this, progress -> main.post(() -> {
@@ -212,6 +207,11 @@ public final class DeviceLogActivity extends AppCompatActivity {
             int percent = progress.totalParts() <= 0 ? 0
                     : Math.min(100, progress.currentPart() * 100 / progress.totalParts());
             setProgress(percent);
+            if (progressStatus != null) {
+                progressStatus.setText("正在接收 " + progress.fileName() + "\n"
+                        + progress.currentPart() + "/" + progress.totalParts()
+                        + " 片 · " + percent + "% · " + size(progress.bytes()));
+            }
             status.setText("正在接收 " + progress.fileName() + "\n"
                     + progress.currentPart() + "/" + progress.totalParts()
                     + " 片 · " + percent + "% · " + size(progress.bytes()));
@@ -223,6 +223,9 @@ public final class DeviceLogActivity extends AppCompatActivity {
             main.post(() -> {
                 if (isDestroyed()) return;
                 setProgress(100);
+                if (progressStatus != null) {
+                    progressStatus.setText("接收完成，正在保存、展开并生成可浏览 ZIP…");
+                }
                 status.setText("手环日志接收完成，正在保存到手机下载目录…");
                 worker.execute(() -> {
                     try {
@@ -241,6 +244,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                                     ? "压缩包已保存。"
                                     : "已展开 " + published.extractedFiles() + " 个文件（"
                                             + size(published.extractedBytes()) + "），并生成可浏览 ZIP。";
+                            dismissProgressModal();
                             status.setText("已拉取 " + received.fileName() + "（" + size(received.bytes())
                                     + "）。\n保存到 "
                                     + published.relativeDirectory().replaceFirst("^Download/", "下载/")
@@ -252,7 +256,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                         main.post(() -> {
                             if (isDestroyed()) return;
                             pulling = false;
-                            setProgress(100);
+                            dismissProgressModal();
                             pull.setText("重新拉取");
                             lastBundle = received.file();
                             share.setVisibility(android.view.View.VISIBLE);
@@ -271,19 +275,76 @@ public final class DeviceLogActivity extends AppCompatActivity {
             if (isDestroyed()) return;
             pulling = false;
             pull.setText("重试拉取");
-            progressBar.setVisibility(android.view.View.GONE);
+            dismissProgressModal();
             status.setText(deviceLogFailure(failure));
             refreshDevice();
         });
     }
 
+    private void showProgressModal() {
+        dismissProgressModal();
+        android.widget.LinearLayout content = new android.widget.LinearLayout(this);
+        content.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = BridgeScreen.dp(this, 24);
+        content.setPadding(pad, BridgeScreen.dp(this, 4), pad, BridgeScreen.dp(this, 4));
+
+        progressStatus = new TextView(this);
+        progressStatus.setText("正在请求手环准备完整 log 目录…");
+        progressStatus.setTextSize(16);
+        progressStatus.setLineSpacing(0, 1.3f);
+        progressStatus.setTextColor(com.google.android.material.color.MaterialColors.getColor(
+                this, com.google.android.material.R.attr.colorOnSurface, 0));
+        android.widget.LinearLayout.LayoutParams statusParams =
+                new android.widget.LinearLayout.LayoutParams(-1, -2);
+        statusParams.bottomMargin = BridgeScreen.dp(this, 16);
+        content.addView(progressStatus, statusParams);
+
+        waitingProgress = new LinearProgressIndicator(this);
+        waitingProgress.setIndeterminate(true);
+        waitingProgress.setTrackThickness(BridgeScreen.dp(this, 8));
+        waitingProgress.setTrackCornerRadius(BridgeScreen.dp(this, 4));
+        waitingProgress.setContentDescription("正在等待手环准备日志");
+        content.addView(waitingProgress, new android.widget.LinearLayout.LayoutParams(-1, -2));
+
+        progressBar = new LinearProgressIndicator(this);
+        progressBar.setIndeterminate(false);
+        progressBar.setProgressCompat(0, false);
+        progressBar.setTrackThickness(BridgeScreen.dp(this, 8));
+        progressBar.setTrackCornerRadius(BridgeScreen.dp(this, 4));
+        progressBar.setContentDescription("设备日志接收进度");
+        progressBar.setVisibility(android.view.View.GONE);
+        content.addView(progressBar, new android.widget.LinearLayout.LayoutParams(-1, -2));
+
+        progressDialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("正在拉取设备日志")
+                .setView(content)
+                .setCancelable(false)
+                .create();
+        progressDialog.setCanceledOnTouchOutside(false);
+        progressDialog.setOnKeyListener((dialog, keyCode, event) -> keyCode == KeyEvent.KEYCODE_BACK);
+        progressDialog.show();
+    }
+
+    private void dismissProgressModal() {
+        android.app.Dialog dialog = progressDialog;
+        progressDialog = null;
+        waitingProgress = null;
+        progressBar = null;
+        progressStatus = null;
+        if (dialog != null && dialog.isShowing()) dialog.dismiss();
+    }
+
     private void setProgress(Integer percent) {
-        progressBar.setVisibility(android.view.View.VISIBLE);
+        LinearProgressIndicator bar = progressBar;
+        LinearProgressIndicator waiting = waitingProgress;
+        if (bar == null) return;
         if (percent == null) {
-            progressBar.setIndeterminate(true);
+            if (waiting != null) waiting.setVisibility(android.view.View.VISIBLE);
+            bar.setVisibility(android.view.View.GONE);
         } else {
-            progressBar.setIndeterminate(false);
-            progressBar.setProgressCompat(Math.max(0, Math.min(100, percent)), true);
+            if (waiting != null) waiting.setVisibility(android.view.View.GONE);
+            bar.setVisibility(android.view.View.VISIBLE);
+            bar.setProgressCompat(Math.max(0, Math.min(100, percent)), true);
         }
     }
 
@@ -365,6 +426,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        dismissProgressModal();
         getContentResolver().unregisterContentObserver(stateObserver);
         main.removeCallbacks(refreshTick);
         worker.shutdown();
