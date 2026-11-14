@@ -34,6 +34,8 @@
         app:trackColor="?attr/colorSurfaceVariant"
         app:trackCornerRadius="3dp"
         app:trackThickness="6dp"
-        app:waveAmplitude="2dp"
+        app:waveAmplitude="@dimen/device_log_progress_wave_amplitude"
+        app:waveSpeed="@dimen/device_log_progress_wave_speed"
+        app:wavelengthDeterminate="@dimen/device_log_progress_wavelength_determinate"
         app:wavelengthIndeterminate="36dp" />
 </LinearLayout>
