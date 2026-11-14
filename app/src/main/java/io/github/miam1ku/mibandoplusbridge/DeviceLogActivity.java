@@ -16,10 +16,11 @@ import androidx.core.content.FileProvider;
 import com.google.android.material.button.MaterialButton;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
-import io.github.miam1ku.mibandoplusbridge.data.DeviceLogExporter;
+import io.github.miam1ku.mibandoplusbridge.data.DeviceLogPublisher;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.integration.DeviceCardProvider;
+import io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen;
 import io.github.miam1ku.mibandoplusbridge.ui.Copy;
@@ -65,11 +66,10 @@ public final class DeviceLogActivity extends AppCompatActivity {
 
         android.widget.LinearLayout explanation = screen.section("日志内容");
         screen.bodyText(explanation,
-                "拉取当前会话的连接、鉴权、命令阶段、健康同步和异常线索，并附上手环型号、固件、"
-                        + "电量、连接方式及手机环境。");
+                "请求手环导出完整 log 目录，经反向 MASS 通道逐片接收，并保存到手机下载目录。"
+                        + "zip、tar 和 tar.gz 包会同时展开。");
         screen.caption(explanation,
-                "压缩包仅保留型号、固件、电量、连接阶段和同步状态；绑定密钥、令牌、手环 MAC、"
-                        + "设备 ID、通知正文及原始协议载荷留在本机。");
+                "设备日志由手环生成，可能包含运行记录和健康相关信息；分享前请检查内容。");
 
         android.widget.LinearLayout operation = screen.section("操作");
         pull = screen.filled(operation, "开始拉取", this::pull);
@@ -191,38 +191,84 @@ public final class DeviceLogActivity extends AppCompatActivity {
         pull.setEnabled(false);
         pull.setText("正在拉取…");
         reconnect.setVisibility(android.view.View.GONE);
-        status.setText("正在整理当前设备会话，随后会打开系统分享…");
+        status.setText("正在请求手环准备完整 log 目录…");
         SessionLog.start(this);
-        String sync = BandLiveService.requestSync(this);
-        SessionLog.line(this, "DEVICE_LOG_PULL requested sync=" + sync);
-        worker.execute(() -> {
-            try {
-                // Give an accepted sync request a moment to append its first visible stages.
-                Thread.sleep("ACCEPTED".equals(sync) ? 600 : 100);
-                File bundle = DeviceLogExporter.export(this);
-                long bytes = bundle.length();
-                SessionLog.line(this, "DEVICE_LOG_PULL ready bytes=" + bytes);
-                main.post(() -> {
-                    if (isDestroyed()) return;
-                    pulling = false;
-                    lastBundle = bundle;
-                    pull.setText("重新拉取");
-                    share.setVisibility(android.view.View.VISIBLE);
-                    status.setText("已生成 " + bundle.getName() + "（" + size(bytes) + "）。");
-                    refreshDevice();
-                    share(bundle);
-                });
-            } catch (Exception failure) {
-                main.post(() -> {
-                    if (isDestroyed()) return;
-                    pulling = false;
-                    pull.setText("重试拉取");
-                    status.setText("日志生成中断：" + safeFailure(failure)
-                            + "。确认手环仍连接后再试一次。");
-                    refreshDevice();
-                });
+        BandLiveService.requestDeviceLogExport(this, progress -> main.post(() -> {
+            if (isDestroyed() || !pulling) return;
+            int percent = progress.totalParts() <= 0 ? 0
+                    : Math.min(100, progress.currentPart() * 100 / progress.totalParts());
+            status.setText("正在接收 " + progress.fileName() + "\n"
+                    + progress.currentPart() + "/" + progress.totalParts()
+                    + " 片 · " + percent + "% · " + size(progress.bytes()));
+        })).whenComplete((received, requestFailure) -> {
+            if (requestFailure != null) {
+                showFailure(requestFailure);
+                return;
             }
+            status.setText("手环日志接收完成，正在保存到手机下载目录…");
+            worker.execute(() -> {
+                try {
+                    DeviceLogPublisher.Result published =
+                            DeviceLogPublisher.publish(this, received.file());
+                    main.post(() -> {
+                        if (isDestroyed()) return;
+                        pulling = false;
+                        lastBundle = received.file();
+                        pull.setText("重新拉取");
+                        share.setVisibility(android.view.View.VISIBLE);
+                        String unpacked = published.extractedFiles() == 0
+                                ? "压缩包已保存。"
+                                : "已展开 " + published.extractedFiles() + " 个文件（"
+                                        + size(published.extractedBytes()) + "）。";
+                        status.setText("已拉取 " + received.fileName() + "（" + size(received.bytes())
+                                + "）。\n保存到 "
+                                + published.relativeDirectory().replaceFirst("^Download/", "下载/")
+                                + "\n" + unpacked);
+                        refreshDevice();
+                        share(received.file());
+                    });
+                } catch (Exception failure) {
+                    main.post(() -> {
+                        if (isDestroyed()) return;
+                        pulling = false;
+                        pull.setText("重新拉取");
+                        lastBundle = received.file();
+                        share.setVisibility(android.view.View.VISIBLE);
+                        status.setText("手环日志已收到，但保存到下载目录时中断："
+                                + safeFailure(failure) + "。可先通过下方按钮分享。");
+                        refreshDevice();
+                    });
+                }
+            });
         });
+    }
+
+    private void showFailure(Throwable failure) {
+        main.post(() -> {
+            if (isDestroyed()) return;
+            pulling = false;
+            pull.setText("重试拉取");
+            status.setText(deviceLogFailure(failure));
+            refreshDevice();
+        });
+    }
+
+    private static String deviceLogFailure(Throwable failure) {
+        Throwable cause = failure;
+        while (cause.getCause() != null && cause.getCause() != cause) cause = cause.getCause();
+        String code = cause.getMessage() == null ? cause.getClass().getSimpleName()
+                : SessionLog.redact(cause.getMessage());
+        return switch (code) {
+            case "DEVICE_LOG_NO_DATA" -> "手环暂无可导出的日志。稍后再试一次。";
+            case "DEVICE_LOG_DEVICE_BUSY" -> "手环正在准备日志，请稍后再试。";
+            case "DEVICE_LOG_DEVICE_REJECTED" -> "手环暂缓了日志导出请求。稍后再试一次。";
+            case "DEVICE_LOG_DIRECT_UPLOAD_UNSUPPORTED" -> "此固件使用直传模式，可先用「发送调试日志」。";
+            case "DEVICE_LOG_RECEIVE_FAILED", "MASS_RECEIVE_CANCELLED" ->
+                    "接收中途停止。确认手环保持连接后再试一次。";
+            case "LIVE_SESSION_REQUIRED", "DEVICE_LOG_SESSION_UNAVAILABLE" ->
+                    "手环连接正在重建，等状态显示「已连接」后再试。";
+            default -> "设备日志拉取中断：" + code + "。确认手环连接后重试。";
+        };
     }
 
     private void shareLast() {
@@ -234,7 +280,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
             Uri uri = FileProvider.getUriForFile(this,
                     "io.github.miam1ku.mibandoplusbridge.debuglog", bundle);
             Intent send = new Intent(Intent.ACTION_SEND);
-            send.setType("application/zip");
+            send.setType(logMime(bundle));
             send.putExtra(Intent.EXTRA_STREAM, uri);
             send.putExtra(Intent.EXTRA_SUBJECT, "小米手环桥接设备日志");
             send.setClipData(ClipData.newRawUri("device-log", uri));
@@ -243,6 +289,22 @@ public final class DeviceLogActivity extends AppCompatActivity {
         } catch (RuntimeException failure) {
             status.setText("日志已保存在应用缓存，可稍后点「再次分享上次日志」。");
         }
+    }
+
+    private static String logMime(File file) {
+        try (java.io.InputStream input = new java.io.FileInputStream(file)) {
+            byte[] head = new byte[4];
+            int read = input.read(head);
+            if (read >= 2 && (head[0] & 0xff) == 0x1f && (head[1] & 0xff) == 0x8b) {
+                return "application/gzip";
+            }
+            if (read >= 2 && head[0] == 'P' && head[1] == 'K') return "application/zip";
+        } catch (Exception ignored) { }
+        String name = file.getName().toLowerCase(java.util.Locale.ROOT);
+        if (name.endsWith(".zip")) return "application/zip";
+        if (name.endsWith(".tar")) return "application/x-tar";
+        if (name.endsWith(".gz") || name.endsWith(".tgz")) return "application/gzip";
+        return "application/octet-stream";
     }
 
     private String readLiveStatus() {
