@@ -297,7 +297,20 @@ public final class DeviceLogActivity extends AppCompatActivity {
         SessionLog.line(this, "UI_LOG_POLL part=" + progress.currentPart()
                 + "/" + progress.totalParts() + " percent=" + percent
                 + " hostChildren=" + (progressHost == null ? -1 : progressHost.getChildCount()));
-        setProgress(percent);
+        if (progressHost != null && !determinateStarted) {
+            SessionLog.line(this, "UI_LOG_APPLY firstValue percent=" + percent
+                    + " oldChildren=" + progressHost.getChildCount());
+            progressHost.removeAllViews();
+            progressBar = new DeviceLogProgressView(this);
+            progressBar.setProgressCompat(percent, false);
+            progressHost.addView(progressBar, new FrameLayout.LayoutParams(-1, -1));
+            determinateStarted = true;
+            SessionLog.line(this, "UI_LOG_APPLY determinateMounted children="
+                    + progressHost.getChildCount()
+                    + " id=" + System.identityHashCode(progressBar));
+        } else if (progressBar != null) {
+            progressBar.setProgressCompat(percent, false);
+        }
         String text = "正在接收 " + progress.fileName() + "\n"
                 + progress.currentPart() + "/" + progress.totalParts()
                 + " 片 · " + percent + "% · " + size(progress.bytes());
