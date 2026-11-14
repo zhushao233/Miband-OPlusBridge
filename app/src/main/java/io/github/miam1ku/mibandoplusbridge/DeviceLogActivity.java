@@ -336,9 +336,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                 + " id=" + System.identityHashCode(progressBar));
 
         progressDialog = new MaterialAlertDialogBuilder(this)
-                .setTitle(BuildConfig.DEBUG
-                        ? "正在拉取设备日志 · " + BuildConfig.VERSION_CODE
-                        : "正在拉取设备日志")
+                .setTitle("正在拉取设备日志")
                 .setView(content)
                 .setCancelable(false)
                 .create();
