@@ -25,25 +25,9 @@
         android:layout_marginEnd="4dp"
         android:layout_marginBottom="24dp">
 
-        <ProgressBar
-            android:id="@+id/device_log_waiting_progress"
-            style="?android:attr/progressBarStyleHorizontal"
+        <io.github.miam1ku.mibandoplusbridge.ui.DeviceLogProgressView
+            android:id="@+id/device_log_progress"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:indeterminate="true"
-            android:indeterminateTint="?attr/colorPrimary"
-            android:progressBackgroundTint="?attr/colorSurfaceVariant" />
-
-        <ProgressBar
-            android:id="@+id/device_log_receive_progress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:indeterminate="false"
-            android:max="100"
-            android:progress="0"
-            android:progressBackgroundTint="?attr/colorSurfaceVariant"
-            android:progressTint="?attr/colorPrimary"
-            android:visibility="gone" />
+            android:layout_height="match_parent" />
     </FrameLayout>
 </LinearLayout>
