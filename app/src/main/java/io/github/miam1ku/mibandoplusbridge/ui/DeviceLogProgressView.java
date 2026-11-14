@@ -8,6 +8,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.View;
+import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 
 /** A small progress view whose indeterminate and determinate draw modes cannot overlap. */
 public final class DeviceLogProgressView extends View {
@@ -18,6 +19,7 @@ public final class DeviceLogProgressView extends View {
     private boolean indeterminate = true;
     private boolean determinateOnly;
     private int progress;
+    private String loggedDrawMode;
 
     public DeviceLogProgressView(Context context) {
         this(context, null);
@@ -37,6 +39,9 @@ public final class DeviceLogProgressView extends View {
 
     public void setIndeterminate(boolean value) {
         if (value && determinateOnly) return;
+        SessionLog.line(getContext(), "UI_LOG_VIEW setIndeterminate=" + value
+                + " id=" + System.identityHashCode(this)
+                + " determinateOnly=" + determinateOnly);
         if (indeterminate == value) {
             if (value) startAnimationIfAttached();
             return;
@@ -51,6 +56,8 @@ public final class DeviceLogProgressView extends View {
     }
 
     public void setProgressCompat(int value, boolean animated) {
+        SessionLog.line(getContext(), "UI_LOG_VIEW setProgress value=" + value
+                + " id=" + System.identityHashCode(this));
         determinateOnly = true;
         indeterminate = false;
         cancelWaiting();
@@ -87,12 +94,14 @@ public final class DeviceLogProgressView extends View {
         canvas.drawRoundRect(rect, radius, radius, trackPaint);
 
         if (indeterminate) {
+            logDraw("indeterminate");
             float segment = viewWidth * 0.26f;
             float travel = Math.max(0, viewWidth - segment);
             float phase = waitingAnimator == null ? 0f : waitingAnimator.getAnimatedFraction();
             float left = travel * phase;
             rect.set(left, top, left + segment, top + trackHeight);
         } else {
+            logDraw("determinate");
             float filled = fillWidth((int) viewWidth, progress);
             if (filled <= 0) return;
             rect.set(0, top, filled, top + trackHeight);
@@ -119,6 +128,16 @@ public final class DeviceLogProgressView extends View {
             animator.removeAllUpdateListeners();
             animator.cancel();
         }
+    }
+
+    private void logDraw(String mode) {
+        if (mode.equals(loggedDrawMode)) return;
+        loggedDrawMode = mode;
+        SessionLog.line(getContext(), "UI_LOG_VIEW draw=" + mode
+                + " progress=" + progress
+                + " indeterminate=" + indeterminate
+                + " determinateOnly=" + determinateOnly
+                + " id=" + System.identityHashCode(this));
     }
 
     private float dp(float value) {
