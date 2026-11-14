@@ -298,6 +298,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
         if (progressBar != null && !determinateStarted) {
             SessionLog.line(this, "UI_LOG_APPLY firstValue percent=" + percent
                     + " oldIndeterminate=" + progressBar.isIndeterminate());
+            configureDeterminateWave();
             progressBar.setIndeterminate(false);
             progressBar.setMax(100);
             progressBar.setProgressCompat(0, false);
@@ -306,7 +307,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                     + System.identityHashCode(progressBar));
         }
         if (progressBar != null) {
-            progressBar.setProgressCompat(percent, true);
+            progressBar.setProgressCompat(percent, false);
         }
         String text = "正在接收 " + progress.fileName() + "\n"
                 + progress.currentPart() + "/" + progress.totalParts()
@@ -321,6 +322,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
                 R.layout.dialog_device_log_progress, null, false);
         progressStatus = content.findViewById(R.id.device_log_progress_status);
         progressBar = content.findViewById(R.id.device_log_progress);
+        configureRequestWave();
         progressBar.setIndeterminate(true);
         progressBar.setMax(100);
         determinateStarted = false;
@@ -356,7 +358,10 @@ public final class DeviceLogActivity extends AppCompatActivity {
             SessionLog.line(this, "UI_LOG_ACTIVITY null calls=" + progressNullCalls
                     + " viewId=" + (progressBar == null ? 0 : System.identityHashCode(progressBar)));
             determinateStarted = false;
-            if (progressBar != null) progressBar.setIndeterminate(true);
+            if (progressBar != null) {
+                configureRequestWave();
+                progressBar.setIndeterminate(true);
+            }
             return;
         }
         progressValueCalls++;
@@ -366,6 +371,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
             SessionLog.line(this, "UI_LOG_ACTIVITY firstValue percent=" + percent
                     + " calls=" + progressValueCalls
                     + " oldIndeterminate=" + progressBar.isIndeterminate());
+            configureDeterminateWave();
             progressBar.setIndeterminate(false);
             progressBar.setMax(100);
             determinateStarted = true;
@@ -373,13 +379,26 @@ public final class DeviceLogActivity extends AppCompatActivity {
                     + " view=" + progressBar.getClass().getName()
                     + " id=" + System.identityHashCode(progressBar));
         }
-        progressBar.setProgressCompat(value, true);
+        progressBar.setProgressCompat(value, false);
         if (value == 100 || lastLoggedProgress < 0 || value >= lastLoggedProgress + 10) {
             lastLoggedProgress = value;
             SessionLog.line(this, "UI_LOG_ACTIVITY value=" + value
                     + " calls=" + progressValueCalls
                     + " viewId=" + System.identityHashCode(progressBar));
         }
+    }
+
+    private void configureRequestWave() {
+        progressBar.setWaveSpeed(0);
+    }
+
+    private void configureDeterminateWave() {
+        progressBar.setWaveAmplitude(getResources().getDimensionPixelSize(
+                R.dimen.device_log_progress_wave_amplitude));
+        progressBar.setWavelengthDeterminate(getResources().getDimensionPixelSize(
+                R.dimen.device_log_progress_wavelength_determinate));
+        progressBar.setWaveSpeed(getResources().getDimensionPixelSize(
+                R.dimen.device_log_progress_wave_speed));
     }
 
     private static String deviceLogFailure(Throwable failure) {
