@@ -6,8 +6,8 @@ package io.github.miam1ku.mibandoplusbridge.ui;
 
 import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.BlendMode;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -71,34 +71,48 @@ public final class LiquidGlassContainer extends FrameLayout {
             half4 main(float2 coord) {
                 float2 halfSize = size * 0.5;
                 float2 centeredCoord = (coord + offset) - halfSize;
-                float2 normalized = centeredCoord / max(halfSize, float2(1.0));
-                float radial = length(normalized);
-                float lensZoom = 0.20 * (1.0 - smoothstep(0.0, 1.0, radial));
-                float2 sampleCoord = centeredCoord * (1.0 - lensZoom) + halfSize;
                 float radius = radiusAt(centeredCoord, cornerRadii);
                 float sd = sdRoundedRect(centeredCoord, halfSize, radius);
-                float verticalRim = 0.0;
-                float horizontalRim = 0.0;
-                if (-sd < refractionHeight) {
-                    float inside = max(-sd, 0.0);
-                    float d = circleMap(1.0 - inside / refractionHeight) * refractionAmount;
-                    float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
-                    float2 grad = gradSdRoundedRect(centeredCoord, halfSize, gradRadius);
-                    float2 normal = grad / max(length(grad), 0.0001);
-                    float edge = 1.0 - smoothstep(0.0, refractionHeight, inside);
-                    verticalRim = edge * pow(abs(normal.y), 1.15);
-                    horizontalRim = edge * pow(abs(normal.x), 1.5);
-                    sampleCoord += d * normal;
-                }
-                half4 color = content.eval(sampleCoord);
+                if (-sd >= refractionHeight) return content.eval(coord);
+                sd = min(sd, 0.0);
+                float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;
+                float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
+                float2 grad = gradSdRoundedRect(centeredCoord, halfSize, gradRadius);
+                grad = normalize(grad + depthEffect * normalize(centeredCoord));
+                float2 sampleCoord = coord + d * grad;
                 if (chromaticAberration > 0.0) {
-                    float2 fringe = normal * chromaticAberration
-                            * (verticalRim + 0.55 * horizontalRim);
-                    color.r = content.eval(sampleCoord + fringe).r;
-                    color.b = content.eval(sampleCoord - fringe).b;
+                    float dispersionIntensity = chromaticAberration
+                            * ((centeredCoord.x * centeredCoord.y) / (halfSize.x * halfSize.y));
+                    float2 dispersedCoord = d * grad * dispersionIntensity;
+                    half4 color = half4(0.0);
+                    half4 red = content.eval(sampleCoord + dispersedCoord);
+                    color.r += red.r / 3.5;
+                    color.a += red.a / 7.0;
+                    half4 orange = content.eval(sampleCoord + dispersedCoord * (2.0 / 3.0));
+                    color.r += orange.r / 3.5;
+                    color.g += orange.g / 7.0;
+                    color.a += orange.a / 7.0;
+                    half4 yellow = content.eval(sampleCoord + dispersedCoord * (1.0 / 3.0));
+                    color.r += yellow.r / 3.5;
+                    color.g += yellow.g / 3.5;
+                    color.a += yellow.a / 7.0;
+                    half4 green = content.eval(sampleCoord);
+                    color.g += green.g / 3.5;
+                    color.a += green.a / 7.0;
+                    half4 cyan = content.eval(sampleCoord - dispersedCoord * (1.0 / 3.0));
+                    color.g += cyan.g / 3.5;
+                    color.b += cyan.b / 3.0;
+                    color.a += cyan.a / 7.0;
+                    half4 blue = content.eval(sampleCoord - dispersedCoord * (2.0 / 3.0));
+                    color.b += blue.b / 3.0;
+                    color.a += blue.a / 7.0;
+                    half4 purple = content.eval(sampleCoord - dispersedCoord);
+                    color.r += purple.r / 7.0;
+                    color.b += purple.b / 3.0;
+                    color.a += purple.a / 7.0;
+                    return color;
                 }
-                color.rgb *= 1.0 + 0.24 * verticalRim - 0.08 * horizontalRim;
-                return color;
+                return content.eval(sampleCoord);
             }
             """;
 
@@ -111,11 +125,13 @@ public final class LiquidGlassContainer extends FrameLayout {
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint innerShadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path clipPath = new Path();
     private final RenderNode renderNode = new RenderNode("liquid-glass");
 
     private View refractionOverlay;
     private LiquidGlassContainer dockSurface;
+    private RuntimeShader lensShader;
     private Shader borderShader;
     private RenderEffect renderEffect;
     private float interactionProgress;
@@ -132,7 +148,7 @@ public final class LiquidGlassContainer extends FrameLayout {
             }
             captureBackdrop();
             invalidate();
-            postOnAnimationDelayed(this, 32);
+            postOnAnimationDelayed(this, selection && interactionProgress > 0f ? 16 : 32);
         }
     };
 
@@ -159,7 +175,8 @@ public final class LiquidGlassContainer extends FrameLayout {
             }
         });
         borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(dp(context, 1));
+        borderPaint.setStrokeWidth(dp(context, 0.65f));
+        borderPaint.setBlendMode(BlendMode.PLUS);
     }
 
     public void setRefractionOverlay(View overlay) {
@@ -174,7 +191,13 @@ public final class LiquidGlassContainer extends FrameLayout {
         if (getWidth() <= 0 || getHeight() <= 0) return;
         canvas.save();
         canvas.clipPath(clipPath);
+        if (renderNode.hasDisplayList()) {
+            canvas.drawRenderNode(renderNode);
+        } else {
+            canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+        }
         canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+        if (floating) drawHighlight(canvas);
         canvas.restore();
     }
 
@@ -196,16 +219,17 @@ public final class LiquidGlassContainer extends FrameLayout {
         int width = getWidth();
         int height = getHeight();
         if (width > 0 && height > 0) {
-            int color = selection
-                    ? ContextCompat.getColor(getContext(),
-                    io.github.miam1ku.mibandoplusbridge.R.color.accent)
-                    : Color.WHITE;
-            int center = (color & 0x00FFFFFF) | 0xFF000000;
-            int edge = color & 0x00FFFFFF;
             glowPaint.setShader(new RadialGradient(
                     interactionX, interactionY, Math.max(width, height) * 1.15f,
-                    new int[]{center, edge}, new float[]{0f, 1f}, Shader.TileMode.CLAMP));
-            glowPaint.setAlpha(Math.round(64f * interactionProgress));
+                    new int[]{0xFFFFFFFF, 0x00FFFFFF}, new float[]{0f, 1f},
+                    Shader.TileMode.CLAMP));
+            glowPaint.setAlpha(Math.round(40f * interactionProgress));
+            if (lensShader != null && selection) {
+                lensShader.setFloatUniform("refractionAmount",
+                        -dp(getContext(), 10) * interactionProgress);
+                lensShader.setFloatUniform("chromaticAberration",
+                        interactionProgress);
+            }
         }
         invalidate();
     }
@@ -254,8 +278,9 @@ public final class LiquidGlassContainer extends FrameLayout {
         canvas.save();
         canvas.clipPath(clipPath);
         canvas.drawRenderNode(renderNode);
-        canvas.drawRect(0, 0, width, height, fillPaint);
-        if (!selection) drawHighlight(canvas);
+        if (selection) drawSelectionSurface(canvas);
+        else canvas.drawRect(0, 0, width, height, fillPaint);
+        drawHighlight(canvas);
         drawInteractionHighlight(canvas);
         canvas.restore();
     }
@@ -263,15 +288,38 @@ public final class LiquidGlassContainer extends FrameLayout {
     private void drawSurface(Canvas canvas) {
         canvas.save();
         canvas.clipPath(clipPath);
-        canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
-        if (floating) drawHighlight(canvas);
+        if (selection) drawSelectionSurface(canvas);
+        else canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+        if (floating || selection) drawHighlight(canvas);
         drawInteractionHighlight(canvas);
         canvas.restore();
     }
 
+    private void drawSelectionSurface(Canvas canvas) {
+        int rest = dark ? 0x1AFFFFFF : 0x1A000000;
+        fillPaint.setShader(null);
+        fillPaint.setColor(withAlpha(rest,
+                Math.round((rest >>> 24) * (1f - interactionProgress))));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+        if (interactionProgress > 0f) {
+            fillPaint.setColor(withAlpha(0x08000000,
+                    Math.round(0x08 * interactionProgress)));
+            canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+            innerShadowPaint.setShader(new LinearGradient(
+                    0, 0, 0, dp(getContext(), 10),
+                    new int[]{0x26000000, 0x00000000},
+                    new float[]{0f, 1f}, Shader.TileMode.CLAMP));
+            innerShadowPaint.setAlpha(Math.round(255f * interactionProgress));
+            canvas.drawRect(0, 0, getWidth(), getHeight(), innerShadowPaint);
+        }
+    }
+
     private void drawHighlight(Canvas canvas) {
         if (borderShader == null) return;
+        if (selection && interactionProgress <= 0f) return;
         borderPaint.setShader(borderShader);
+        borderPaint.setAlpha(selection
+                ? Math.round(145f * interactionProgress) : 128);
         canvas.drawPath(clipPath, borderPaint);
     }
 
@@ -283,23 +331,28 @@ public final class LiquidGlassContainer extends FrameLayout {
     private RenderEffect renderEffect() {
         if (renderEffect != null) return renderEffect;
         try {
-            RuntimeShader shader = new RuntimeShader(REFRACTION_SHADER);
-            shader.setFloatUniform("size", getWidth(), getHeight());
-            shader.setFloatUniform("offset", 0f, 0f);
-            shader.setFloatUniform("cornerRadii",
+            lensShader = new RuntimeShader(REFRACTION_SHADER);
+            lensShader.setFloatUniform("size", getWidth(), getHeight());
+            lensShader.setFloatUniform("offset", 0f, 0f);
+            lensShader.setFloatUniform("cornerRadii",
                     cornerRadius, cornerRadius, cornerRadius, cornerRadius);
-            shader.setFloatUniform("refractionHeight",
-                    dp(getContext(), selection ? 12 : 20));
-            shader.setFloatUniform("refractionAmount",
-                    -dp(getContext(), selection ? 18 : 18));
-            shader.setFloatUniform("depthEffect", 0f);
-            shader.setFloatUniform("chromaticAberration",
-                    dp(getContext(), selection ? 1.2f : 0f));
-            RenderEffect lens = RenderEffect.createRuntimeShaderEffect(shader, "content");
-            RenderEffect blur = RenderEffect.createBlurEffect(
-                    dp(getContext(), selection ? 1 : 4),
-                    dp(getContext(), selection ? 1 : 4), Shader.TileMode.CLAMP);
-            renderEffect = RenderEffect.createChainEffect(lens, blur);
+            lensShader.setFloatUniform("refractionHeight",
+                    dp(getContext(), selection ? 14 : 24));
+            lensShader.setFloatUniform("refractionAmount",
+                    selection
+                            ? -dp(getContext(), 10) * interactionProgress
+                            : -dp(getContext(), 24));
+            lensShader.setFloatUniform("depthEffect", 0f);
+            lensShader.setFloatUniform("chromaticAberration",
+                    selection ? interactionProgress : 0);
+            RenderEffect lens = RenderEffect.createRuntimeShaderEffect(lensShader, "content");
+            if (selection) {
+                renderEffect = lens;
+            } else {
+                RenderEffect blur = RenderEffect.createBlurEffect(
+                        dp(getContext(), 4), dp(getContext(), 4), Shader.TileMode.CLAMP);
+                renderEffect = RenderEffect.createChainEffect(lens, blur);
+            }
         } catch (RuntimeException unsupported) {
             effectFailed = true;
         }
@@ -371,35 +424,31 @@ public final class LiquidGlassContainer extends FrameLayout {
         int tint;
         if (selection) {
             tint = dark
-                    ? (glass ? 0x1CFFFFFF : 0xE6000000)
-                    : (glass ? 0x16000000 : 0xF2FFFFFF);
+                    ? (glass ? 0x1AFFFFFF : 0xE6000000)
+                    : (glass ? 0x1A000000 : 0xF2FFFFFF);
         } else {
             tint = dark
-                    ? (base | (glass ? 0x86000000 : 0xFF000000))
-                    : (base | (glass ? 0x70FFFFFF : 0xFFFFFFFF));
+                    ? (base | (glass ? 0x66000000 : 0xFF000000))
+                    : (base | (glass ? 0x66FFFFFF : 0xFFFFFFFF));
         }
         fillPaint.setShader(null);
         fillPaint.setColor(tint);
 
         if (glass && selection) {
-            int top = dark ? 0x40FFFFFF : 0x2C000000;
-            int middle = dark ? 0x0CFFFFFF : 0x08000000;
-            int bottom = dark ? 0x34FFFFFF : 0x22000000;
-            Shader fillShader = new LinearGradient(0, 0, 0, height,
-                    new int[]{top, middle, bottom}, null, Shader.TileMode.CLAMP);
-            fillPaint.setShader(fillShader);
+            fillPaint.setShader(null);
+            fillPaint.setColor(dark ? 0x1AFFFFFF : 0x1A000000);
             borderShader = new LinearGradient(0, 0, 0, height,
-                    new int[]{0xE6FFFFFF, 0x48FFFFFF, 0xC0FFFFFF},
+                    new int[]{0xFFFFFFFF, 0x54FFFFFF, 0xE6FFFFFF},
                     new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP);
         } else if (glass && floating) {
-            int top = dark ? 0x22FFFFFF : 0x58FFFFFF;
-            int middle = dark ? 0x08FFFFFF : 0x18FFFFFF;
-            int bottom = dark ? 0x1CFFFFFF : 0x34FFFFFF;
+            int top = dark ? 0x26FFFFFF : 0x52FFFFFF;
+            int middle = dark ? 0x08FFFFFF : 0x14FFFFFF;
+            int bottom = dark ? 0x20FFFFFF : 0x3CFFFFFF;
             Shader fillShader = new LinearGradient(0, 0, 0, height,
                     new int[]{top, middle, bottom}, null, Shader.TileMode.CLAMP);
             fillPaint.setShader(fillShader);
             borderShader = new LinearGradient(0, 0, 0, height,
-                    new int[]{0x8AFFFFFF, 0x12FFFFFF, 0x62FFFFFF},
+                    new int[]{0xFFFFFFFF, 0x54FFFFFF, 0xE6FFFFFF},
                     new float[]{0f, 0.52f, 1f}, Shader.TileMode.CLAMP);
         } else {
             borderShader = null;
@@ -410,5 +459,9 @@ public final class LiquidGlassContainer extends FrameLayout {
 
     private static int dp(Context context, float value) {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private static int withAlpha(int color, int alpha) {
+        return (color & 0x00FFFFFF) | (Math.max(0, Math.min(255, alpha)) << 24);
     }
 }
