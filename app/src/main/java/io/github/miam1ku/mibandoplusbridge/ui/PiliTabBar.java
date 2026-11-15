@@ -8,8 +8,11 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.animation.PathInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -36,13 +39,22 @@ public final class PiliTabBar extends FrameLayout {
     private final LinearLayout row;
     private final View indicator;
     private final List<Tab> tabs = new ArrayList<>();
+    private final int touchSlop;
     private int selectedIndex;
     private boolean laidOut;
+    private boolean dragging;
+    private boolean pressFeedback;
+    private float downX;
+    private float downY;
+    private float dragStartFraction;
+    private int dragStartIndex;
+    private LiquidGlassContainer dockHost;
     private OnTabSelectedListener listener;
 
     public PiliTabBar(Context context, @MenuRes int menuRes, int checkedItemId, boolean compact) {
         super(context);
         this.compact = compact;
+        touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
         setClipToPadding(false);
         setPadding(dp(4), dp(4), dp(4), dp(4));
 
@@ -64,6 +76,10 @@ public final class PiliTabBar extends FrameLayout {
 
     public void setOnTabSelectedListener(OnTabSelectedListener listener) {
         this.listener = listener;
+    }
+
+    public void setDockHost(LiquidGlassContainer dockHost) {
+        this.dockHost = dockHost;
     }
 
     public void check(int itemId) {
@@ -113,6 +129,22 @@ public final class PiliTabBar extends FrameLayout {
             post(() -> positionIndicator(false));
             return;
         }
+        updateIndicatorGeometry();
+        float targetX = indicatorX(selectedIndex);
+        indicator.animate().cancel();
+        if (animate && laidOut && Math.abs(indicator.getX() - targetX) > 0.5f) {
+            indicator.animate()
+                    .x(targetX)
+                    .setDuration(300)
+                    .setInterpolator(new OvershootInterpolator(0.85f))
+                    .start();
+        } else {
+            indicator.setX(targetX);
+        }
+        laidOut = true;
+    }
+
+    private void updateIndicatorGeometry() {
         int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
         int innerHeight = getHeight() - getPaddingTop() - getPaddingBottom();
         int itemWidth = innerWidth / tabs.size();
@@ -125,19 +157,149 @@ public final class PiliTabBar extends FrameLayout {
         params.height = pillHeight;
         indicator.setLayoutParams(params);
         indicator.setY(getPaddingTop() + inset);
+    }
 
-        float targetX = getPaddingLeft() + selectedIndex * itemWidth + inset;
+    private float indicatorX(float fraction) {
+        int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
+        float itemWidth = innerWidth / (float) tabs.size();
+        return getPaddingLeft() + fraction * itemWidth + dp(4);
+    }
+
+    private void moveIndicatorDuringDrag(float fraction) {
+        if (tabs.isEmpty() || getWidth() == 0) return;
+        updateIndicatorGeometry();
         indicator.animate().cancel();
-        if (animate) {
-            indicator.animate()
-                    .x(targetX)
-                    .setDuration(240)
-                    .setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f))
-                    .start();
-        } else {
-            indicator.setX(targetX);
+        indicator.setX(indicatorX(fraction));
+        indicator.setScaleX(1.04f);
+        indicator.setScaleY(1.04f);
+    }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) setPressFeedback(true);
+        boolean handled = super.dispatchTouchEvent(event);
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            setPressFeedback(false);
         }
-        laidOut = true;
+        return handled;
+    }
+
+    @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+        if (!compact || tabs.isEmpty()) return false;
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                downX = event.getX();
+                downY = event.getY();
+                dragStartIndex = selectedIndex;
+                dragStartFraction = selectedIndex;
+                dragging = false;
+                return false;
+            case MotionEvent.ACTION_MOVE:
+                float dx = event.getX() - downX;
+                float dy = event.getY() - downY;
+                if (!dragging && Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy)) {
+                    dragging = true;
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                    updateDrag(dx);
+                    return true;
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    @Override public boolean onTouchEvent(MotionEvent event) {
+        if (!compact) return super.onTouchEvent(event);
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_MOVE:
+                if (dragging) {
+                    updateDrag(event.getX() - downX);
+                    return true;
+                }
+                break;
+            case MotionEvent.ACTION_UP:
+                if (dragging) {
+                    finishDrag();
+                    return true;
+                }
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                if (dragging) {
+                    cancelDrag();
+                    return true;
+                }
+                break;
+            default:
+                break;
+        }
+        return super.onTouchEvent(event);
+    }
+
+    private void updateDrag(float dx) {
+        if (tabs.isEmpty() || getWidth() == 0) return;
+        int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
+        float itemWidth = innerWidth / (float) tabs.size();
+        float fraction = Math.max(0f, Math.min(tabs.size() - 1f,
+                dragStartFraction + dx / itemWidth));
+        int candidate = Math.round(fraction);
+        if (candidate != selectedIndex) {
+            selectedIndex = candidate;
+            applyActiveTabs();
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+        }
+        moveIndicatorDuringDrag(fraction);
+        if (dockHost != null) {
+            float center = (tabs.size() - 1) / 2f;
+            float normalized = center == 0f ? 0f : (fraction - center) / center;
+            dockHost.setDragOffset(dp(3) * normalized);
+        }
+    }
+
+    private void finishDrag() {
+        int target = selectedIndex;
+        selectedIndex = target;
+        applyActiveTabs();
+        positionIndicator(true);
+        if (dockHost != null) dockHost.setDragOffset(0f);
+        if (target != dragStartIndex && listener != null) {
+            listener.onTabSelected(tabs.get(target).id);
+        }
+        dragging = false;
+    }
+
+    private void cancelDrag() {
+        selectedIndex = dragStartIndex;
+        applyActiveTabs();
+        positionIndicator(false);
+        if (dockHost != null) dockHost.setDragOffset(0f);
+        dragging = false;
+    }
+
+    private void setPressFeedback(boolean pressed) {
+        pressFeedback = pressed;
+        if (dockHost != null) dockHost.animatePress(pressed);
+        for (int index = 0; index < tabs.size(); index++) {
+            tabs.get(index).animatePressScale(pressed && index == selectedIndex);
+        }
+        indicator.animate().cancel();
+        indicator.animate()
+                .scaleX(pressed ? 1.06f : 1f)
+                .scaleY(pressed ? 1.06f : 1f)
+                .setDuration(pressed ? 120 : 240)
+                .setInterpolator(pressed
+                        ? new PathInterpolator(0.2f, 0f, 0f, 1f)
+                        : new OvershootInterpolator(0.8f))
+                .start();
+    }
+
+    private void applyActiveTabs() {
+        for (int i = 0; i < tabs.size(); i++) tabs.get(i).setActive(i == selectedIndex);
+        if (pressFeedback && selectedIndex >= 0 && selectedIndex < tabs.size()) {
+            for (int i = 0; i < tabs.size(); i++) {
+                tabs.get(i).animatePressScale(i == selectedIndex);
+            }
+        }
     }
 
     @Override
@@ -201,6 +363,18 @@ public final class PiliTabBar extends FrameLayout {
                     ? Typeface.create("sans-serif-medium", Typeface.NORMAL)
                     : Typeface.DEFAULT);
             setSelected(active);
+        }
+
+        void animatePressScale(boolean pressed) {
+            animate().cancel();
+            animate()
+                    .scaleX(pressed ? 1.12f : 1f)
+                    .scaleY(pressed ? 1.12f : 1f)
+                    .setDuration(pressed ? 120 : 240)
+                    .setInterpolator(pressed
+                            ? new PathInterpolator(0.2f, 0f, 0f, 1f)
+                            : new OvershootInterpolator(0.7f))
+                    .start();
         }
     }
 

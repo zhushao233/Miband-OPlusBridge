@@ -201,7 +201,8 @@ public final class BridgeScreen {
             } else {
                 params.leftMargin = 0;
                 params.rightMargin = 0;
-                params.bottomMargin = bars.bottom;
+                params.bottomMargin = 0;
+                params.height = dp(activity, 64) + bars.bottom;
                 view.setPadding(bars.left, 0, bars.right, 0);
             }
             view.setLayoutParams(params);
@@ -536,6 +537,7 @@ public final class BridgeScreen {
                                         boolean floating, View backdropSource) {
         LiquidGlassContainer frame = new LiquidGlassContainer(
                 activity, backdropSource, floating, floating && UiStyle.glass(activity));
+        tabBar.setDockHost(frame);
         if (floating) {
             frame.setElevation(dp(activity, UiStyle.glass(activity) ? 12 : 7));
             frame.addView(tabBar, new FrameLayout.LayoutParams(-2, dp(activity, 64)));
@@ -548,7 +550,8 @@ public final class BridgeScreen {
 
     private static FrameLayout.LayoutParams tabBarContainerParams(
             AppCompatActivity activity, boolean floating) {
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(floating ? -2 : -1, -2);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                floating ? -2 : -1, floating ? -2 : dp(activity, 64));
         params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         if (floating) {
             params.leftMargin = dp(activity, 16);

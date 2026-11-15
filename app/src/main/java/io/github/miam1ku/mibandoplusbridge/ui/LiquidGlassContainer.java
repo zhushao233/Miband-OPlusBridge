@@ -16,6 +16,8 @@ import android.graphics.RecordingCanvas;
 import android.graphics.RuntimeShader;
 import android.graphics.Shader;
 import android.view.View;
+import android.view.animation.OvershootInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import androidx.core.content.ContextCompat;
 
@@ -74,10 +76,14 @@ public final class LiquidGlassContainer extends FrameLayout {
                 sd = min(sd, 0.0);
                 float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;
                 float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
-                float2 grad = normalize(
-                        gradSdRoundedRect(centeredCoord, halfSize, gradRadius)
-                                + depthEffect * normalize(centeredCoord));
-                return content.eval(coord + d * grad);
+                float2 grad = gradSdRoundedRect(centeredCoord, halfSize, gradRadius);
+                float2 normal = grad / max(length(grad), 0.0001);
+                half4 color = content.eval(coord + d * normal);
+                float edge = 1.0 - smoothstep(0.0, refractionHeight, max(-sd, 0.0));
+                float verticalRim = edge * pow(abs(normal.y), 1.15);
+                float horizontalRim = edge * pow(abs(normal.x), 1.5);
+                color.rgb *= 1.0 + 0.24 * verticalRim - 0.08 * horizontalRim;
+                return color;
             }
             """;
 
@@ -126,6 +132,26 @@ public final class LiquidGlassContainer extends FrameLayout {
         });
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(dp(context, 1));
+        setPivotX(0.5f);
+        setPivotY(0.5f);
+    }
+
+    /** Gives the floating dock a short liquid squash instead of a flat click. */
+    public void animatePress(boolean pressed) {
+        if (!floating) return;
+        animate().cancel();
+        animate()
+                .scaleX(pressed ? 1.018f : 1f)
+                .scaleY(pressed ? 1.024f : 1f)
+                .setDuration(pressed ? 130 : 320)
+                .setInterpolator(pressed
+                        ? new PathInterpolator(0.2f, 0f, 0f, 1f)
+                        : new OvershootInterpolator(0.9f))
+                .start();
+    }
+
+    public void setDragOffset(float offset) {
+        if (floating) setTranslationX(offset);
     }
 
     @Override protected void onAttachedToWindow() {
@@ -197,11 +223,11 @@ public final class LiquidGlassContainer extends FrameLayout {
             shader.setFloatUniform("cornerRadii",
                     cornerRadius, cornerRadius, cornerRadius, cornerRadius);
             shader.setFloatUniform("refractionHeight", dp(getContext(), 20));
-            shader.setFloatUniform("refractionAmount", -dp(getContext(), 20));
+            shader.setFloatUniform("refractionAmount", -dp(getContext(), 18));
             shader.setFloatUniform("depthEffect", 0f);
             RenderEffect lens = RenderEffect.createRuntimeShaderEffect(shader, "content");
             RenderEffect blur = RenderEffect.createBlurEffect(
-                    dp(getContext(), 12), dp(getContext(), 12), Shader.TileMode.CLAMP);
+                    dp(getContext(), 4), dp(getContext(), 4), Shader.TileMode.CLAMP);
             renderEffect = RenderEffect.createChainEffect(lens, blur);
         } catch (RuntimeException unsupported) {
             effectFailed = true;
@@ -266,15 +292,15 @@ public final class LiquidGlassContainer extends FrameLayout {
         fillPaint.setColor(tint);
 
         if (glass && floating) {
-            int top = dark ? 0x20FFFFFF : 0x55FFFFFF;
-            int middle = dark ? 0x0CFFFFFF : 0x20FFFFFF;
-            int bottom = dark ? 0x18000000 : 0x12000000;
-            Shader fillShader = new LinearGradient(0, 0, width, height,
+            int top = dark ? 0x22FFFFFF : 0x58FFFFFF;
+            int middle = dark ? 0x08FFFFFF : 0x18FFFFFF;
+            int bottom = dark ? 0x1CFFFFFF : 0x34FFFFFF;
+            Shader fillShader = new LinearGradient(0, 0, 0, height,
                     new int[]{top, middle, bottom}, null, Shader.TileMode.CLAMP);
             fillPaint.setShader(fillShader);
-            borderShader = new LinearGradient(0, 0, width, height,
-                    new int[]{0x66FFFFFF, 0x16FFFFFF, 0x26000000},
-                    new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP);
+            borderShader = new LinearGradient(0, 0, 0, height,
+                    new int[]{0x8AFFFFFF, 0x12FFFFFF, 0x62FFFFFF},
+                    new float[]{0f, 0.52f, 1f}, Shader.TileMode.CLAMP);
         } else {
             borderShader = null;
         }
