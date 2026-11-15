@@ -1,5 +1,5 @@
 /*
- * Backdrop capture and rounded refraction adapted from
+ * Backdrop capture, refraction and edge highlight adapted from
  * Kyant0/AndroidLiquidGlass (Apache-2.0), ported to the Android View system.
  */
 package io.github.miam1ku.mibandoplusbridge.ui;
@@ -8,9 +8,13 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.BlendMode;
 import android.graphics.Canvas;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffColorFilter;
 import android.graphics.RadialGradient;
 import android.graphics.RenderEffect;
 import android.graphics.RenderNode;
@@ -19,11 +23,10 @@ import android.graphics.RuntimeShader;
 import android.graphics.Shader;
 import android.view.View;
 import android.widget.FrameLayout;
-import androidx.core.content.ContextCompat;
 
 /**
- * Draws the dock as a real backdrop effect: the content beneath the dock is
- * copied into a RenderNode, blurred and refracted through a rounded-rectangle
+ * Draws the dock as a real backdrop effect. The page behind the dock is copied
+ * into a RenderNode, saturated, blurred and refracted through a rounded-rectangle
  * AGSL shader before the translucent surface is painted on top.
  */
 public final class LiquidGlassContainer extends FrameLayout {
@@ -68,12 +71,16 @@ public final class LiquidGlassContainer extends FrameLayout {
                 return 1.0 - sqrt(1.0 - x * x);
             }
 
+            half4 sampleContent(float2 coord) {
+                return content.eval(clamp(coord, float2(0.5), size - 0.5));
+            }
+
             half4 main(float2 coord) {
                 float2 halfSize = size * 0.5;
                 float2 centeredCoord = (coord + offset) - halfSize;
                 float radius = radiusAt(centeredCoord, cornerRadii);
                 float sd = sdRoundedRect(centeredCoord, halfSize, radius);
-                if (-sd >= refractionHeight) return content.eval(coord);
+                if (-sd >= refractionHeight) return sampleContent(coord);
                 sd = min(sd, 0.0);
                 float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;
                 float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
@@ -85,60 +92,119 @@ public final class LiquidGlassContainer extends FrameLayout {
                             * ((centeredCoord.x * centeredCoord.y) / (halfSize.x * halfSize.y));
                     float2 dispersedCoord = d * grad * dispersionIntensity;
                     half4 color = half4(0.0);
-                    half4 red = content.eval(sampleCoord + dispersedCoord);
+                    half4 red = sampleContent(sampleCoord + dispersedCoord);
                     color.r += red.r / 3.5;
                     color.a += red.a / 7.0;
-                    half4 orange = content.eval(sampleCoord + dispersedCoord * (2.0 / 3.0));
+                    half4 orange = sampleContent(sampleCoord + dispersedCoord * (2.0 / 3.0));
                     color.r += orange.r / 3.5;
                     color.g += orange.g / 7.0;
                     color.a += orange.a / 7.0;
-                    half4 yellow = content.eval(sampleCoord + dispersedCoord * (1.0 / 3.0));
+                    half4 yellow = sampleContent(sampleCoord + dispersedCoord * (1.0 / 3.0));
                     color.r += yellow.r / 3.5;
                     color.g += yellow.g / 3.5;
                     color.a += yellow.a / 7.0;
-                    half4 green = content.eval(sampleCoord);
+                    half4 green = sampleContent(sampleCoord);
                     color.g += green.g / 3.5;
                     color.a += green.a / 7.0;
-                    half4 cyan = content.eval(sampleCoord - dispersedCoord * (1.0 / 3.0));
+                    half4 cyan = sampleContent(sampleCoord - dispersedCoord * (1.0 / 3.0));
                     color.g += cyan.g / 3.5;
                     color.b += cyan.b / 3.0;
                     color.a += cyan.a / 7.0;
-                    half4 blue = content.eval(sampleCoord - dispersedCoord * (2.0 / 3.0));
+                    half4 blue = sampleContent(sampleCoord - dispersedCoord * (2.0 / 3.0));
                     color.b += blue.b / 3.0;
                     color.a += blue.a / 7.0;
-                    half4 purple = content.eval(sampleCoord - dispersedCoord);
+                    half4 purple = sampleContent(sampleCoord - dispersedCoord);
                     color.r += purple.r / 7.0;
                     color.b += purple.b / 3.0;
                     color.a += purple.a / 7.0;
                     return color;
                 }
-                return content.eval(sampleCoord);
+                return sampleContent(sampleCoord);
             }
             """;
+
+    private static final String HIGHLIGHT_SHADER = """
+            uniform float2 size;
+            uniform float4 cornerRadii;
+            uniform float angle;
+            uniform float falloff;
+
+            float radiusAt(float2 centeredCoord, float4 radii) {
+                if (centeredCoord.x >= 0.0) {
+                    if (centeredCoord.y <= 0.0) return radii.y;
+                    else return radii.z;
+                } else {
+                    if (centeredCoord.y <= 0.0) return radii.x;
+                    else return radii.w;
+                }
+            }
+
+            float sdRoundedRect(float2 coord, float2 halfSize, float radius) {
+                float2 cornerCoord = abs(coord) - (halfSize - float2(radius));
+                float outside = length(max(cornerCoord, 0.0)) - radius;
+                float inside = min(max(cornerCoord.x, cornerCoord.y), 0.0);
+                return outside + inside;
+            }
+
+            float2 gradSdRoundedRect(float2 coord, float2 halfSize, float radius) {
+                float2 cornerCoord = abs(coord) - (halfSize - float2(radius));
+                if (cornerCoord.x >= 0.0 || cornerCoord.y >= 0.0) {
+                    return sign(coord) * normalize(max(cornerCoord, 0.0));
+                } else {
+                    float gradX = step(cornerCoord.y, cornerCoord.x);
+                    return sign(coord) * float2(gradX, 1.0 - gradX);
+                }
+            }
+
+            half4 main(float2 coord) {
+                float2 halfSize = size * 0.5;
+                float2 centeredCoord = coord - halfSize;
+                float radius = radiusAt(centeredCoord, cornerRadii);
+                float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
+                float2 grad = gradSdRoundedRect(centeredCoord, halfSize, gradRadius);
+                float2 normal = float2(cos(angle), sin(angle));
+                float intensity = pow(abs(dot(grad, normal)), falloff);
+                return half4(1.0, 1.0, 1.0, 1.0) * intensity;
+            }
+            """;
+
+    private static final ColorMatrixColorFilter VIBRANCY_FILTER =
+            new ColorMatrixColorFilter(new ColorMatrix(new float[]{
+                    1.6065f, 0.3575f, 0.0360f, 0f, 0f,
+                    0.1065f, 1.8575f, 0.0360f, 0f, 0f,
+                    0.1065f, 0.3575f, 1.5360f, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f
+            }));
 
     private final View backdropSource;
     private final boolean floating;
     private final boolean glass;
     private final boolean selection;
     private final boolean dark;
-    private final float cornerRadius;
-    private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint surfacePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint outlinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint highlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint interactionPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint innerShadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dockContentPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path clipPath = new Path();
     private final RenderNode renderNode = new RenderNode("liquid-glass");
 
     private View refractionOverlay;
+    private View dockContent;
     private LiquidGlassContainer dockSurface;
     private RuntimeShader lensShader;
-    private Shader borderShader;
+    private RuntimeShader highlightShader;
     private RenderEffect renderEffect;
+    private float cornerRadius;
     private float interactionProgress;
     private float interactionX;
     private float interactionY;
+    private int solidTint;
     private boolean effectFailed;
     private boolean ticking;
+
     private final Runnable backdropTick = new Runnable() {
         @Override public void run() {
             if (!ticking || effectFailed || !isAttachedToWindow()
@@ -166,7 +232,6 @@ public final class LiquidGlassContainer extends FrameLayout {
         this.selection = selection;
         dark = (context.getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        cornerRadius = dp(context, selection ? 38.4f : (floating ? 32 : 0));
         setWillNotDraw(false);
         setClipChildren(false);
         setOutlineProvider(new android.view.ViewOutlineProvider() {
@@ -174,9 +239,11 @@ public final class LiquidGlassContainer extends FrameLayout {
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius);
             }
         });
-        borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(dp(context, 0.65f));
-        borderPaint.setBlendMode(BlendMode.PLUS);
+        highlightPaint.setStyle(Paint.Style.STROKE);
+        highlightPaint.setBlendMode(BlendMode.PLUS);
+        outlinePaint.setStyle(Paint.Style.STROKE);
+        interactionPaint.setBlendMode(BlendMode.PLUS);
+        glowPaint.setBlendMode(BlendMode.PLUS);
     }
 
     public void setRefractionOverlay(View overlay) {
@@ -187,25 +254,20 @@ public final class LiquidGlassContainer extends FrameLayout {
         if (dock != this) dockSurface = dock;
     }
 
-    void drawBackdropLayer(Canvas canvas) {
-        if (getWidth() <= 0 || getHeight() <= 0) return;
-        canvas.save();
-        canvas.clipPath(clipPath);
-        if (renderNode.hasDisplayList()) {
-            canvas.drawRenderNode(renderNode);
-        } else {
-            canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
-        }
-        canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
-        if (floating) drawHighlight(canvas);
-        canvas.restore();
+    public void setDockContent(View content, int tintColor) {
+        if (content == this) return;
+        dockContent = content;
+        dockContentPaint.setColorFilter(new PorterDuffColorFilter(
+                tintColor, PorterDuff.Mode.SRC_IN));
     }
 
     public void setFloatingPressScale(float progress) {
         if (!floating || selection) return;
         float value = Math.max(0f, Math.min(1f, progress));
-        setScaleX(1f + 0.018f * value);
-        setScaleY(1f + 0.024f * value);
+        float width = Math.max(1f, getWidth());
+        float scale = 1f + dp(getContext(), 16) / width * value;
+        setScaleX(scale);
+        setScaleY(scale);
     }
 
     public void setDragOffset(float offset) {
@@ -220,16 +282,20 @@ public final class LiquidGlassContainer extends FrameLayout {
         int height = getHeight();
         if (width > 0 && height > 0) {
             glowPaint.setShader(new RadialGradient(
-                    interactionX, interactionY, Math.max(width, height) * 1.15f,
+                    interactionX, interactionY,
+                    Math.min(width, height) * 1.5f,
                     new int[]{0xFFFFFFFF, 0x00FFFFFF}, new float[]{0f, 1f},
                     Shader.TileMode.CLAMP));
-            glowPaint.setAlpha(Math.round(40f * interactionProgress));
+            glowPaint.setAlpha(Math.round(38f * interactionProgress));
             if (lensShader != null && selection) {
                 lensShader.setFloatUniform("refractionAmount",
-                        -dp(getContext(), 10) * interactionProgress);
-                lensShader.setFloatUniform("chromaticAberration",
-                        interactionProgress);
+                        -dp(getContext(), 14) * interactionProgress);
+                lensShader.setFloatUniform("chromaticAberration", interactionProgress);
             }
+        }
+        if (selection) {
+            if (interactionProgress > 0f) startTicker();
+            else stopTicker();
         }
         invalidate();
     }
@@ -269,17 +335,24 @@ public final class LiquidGlassContainer extends FrameLayout {
     }
 
     private void drawGlass(Canvas canvas) {
-        int width = getWidth();
-        int height = getHeight();
-        if (!renderNode.hasDisplayList()) {
-            drawSurface(canvas);
+        if (selection) {
+            canvas.save();
+            canvas.clipPath(clipPath);
+            if (interactionProgress > 0.001f && renderNode.hasDisplayList()) {
+                canvas.drawRenderNode(renderNode);
+            }
+            drawSelectionSurface(canvas);
+            drawOutline(canvas);
+            drawHighlight(canvas);
+            canvas.restore();
             return;
         }
+
         canvas.save();
         canvas.clipPath(clipPath);
-        canvas.drawRenderNode(renderNode);
-        if (selection) drawSelectionSurface(canvas);
-        else canvas.drawRect(0, 0, width, height, fillPaint);
+        if (renderNode.hasDisplayList()) canvas.drawRenderNode(renderNode);
+        drawDockSurface(canvas);
+        drawOutline(canvas);
         drawHighlight(canvas);
         drawInteractionHighlight(canvas);
         canvas.restore();
@@ -289,22 +362,38 @@ public final class LiquidGlassContainer extends FrameLayout {
         canvas.save();
         canvas.clipPath(clipPath);
         if (selection) drawSelectionSurface(canvas);
-        else canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
-        if (floating || selection) drawHighlight(canvas);
-        drawInteractionHighlight(canvas);
+        else drawDockSurface(canvas);
+        if (floating) drawOutline(canvas);
+        if (!selection) drawInteractionHighlight(canvas);
         canvas.restore();
     }
 
+    private void drawDockSurface(Canvas canvas) {
+        surfacePaint.setShader(null);
+        if (!glass) {
+            surfacePaint.setColor(solidTint);
+        } else {
+            surfacePaint.setColor(dark ? 0x66121212 : 0x66FAFAFA);
+        }
+        canvas.drawRect(0, 0, getWidth(), getHeight(), surfacePaint);
+    }
+
     private void drawSelectionSurface(Canvas canvas) {
-        int rest = dark ? 0x1AFFFFFF : 0x1A000000;
-        fillPaint.setShader(null);
-        fillPaint.setColor(withAlpha(rest,
-                Math.round((rest >>> 24) * (1f - interactionProgress))));
-        canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+        if (!glass) {
+            surfacePaint.setShader(null);
+            surfacePaint.setColor(solidTint);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), surfacePaint);
+            return;
+        }
+
+        surfacePaint.setShader(null);
+        surfacePaint.setColor(withAlpha(0x1A000000,
+                Math.round(0x1A * (1f - interactionProgress))));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), surfacePaint);
         if (interactionProgress > 0f) {
-            fillPaint.setColor(withAlpha(0x08000000,
+            surfacePaint.setColor(withAlpha(0x08000000,
                     Math.round(0x08 * interactionProgress)));
-            canvas.drawRect(0, 0, getWidth(), getHeight(), fillPaint);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), surfacePaint);
             innerShadowPaint.setShader(new LinearGradient(
                     0, 0, 0, dp(getContext(), 10),
                     new int[]{0x26000000, 0x00000000},
@@ -315,48 +404,76 @@ public final class LiquidGlassContainer extends FrameLayout {
     }
 
     private void drawHighlight(Canvas canvas) {
-        if (borderShader == null) return;
+        if (highlightShader == null) return;
         if (selection && interactionProgress <= 0f) return;
-        borderPaint.setShader(borderShader);
-        borderPaint.setAlpha(selection
-                ? Math.round(145f * interactionProgress) : 128);
-        canvas.drawPath(clipPath, borderPaint);
+        highlightPaint.setShader(highlightShader);
+        highlightPaint.setAlpha(selection
+                ? Math.round(128f * interactionProgress) : 128);
+        canvas.drawPath(clipPath, highlightPaint);
+    }
+
+    private void drawOutline(Canvas canvas) {
+        int alpha;
+        if (selection) {
+            alpha = dark ? 26 : 18;
+        } else {
+            alpha = dark ? 64 : 28;
+        }
+        outlinePaint.setShader(null);
+        outlinePaint.setColor(withAlpha(dark ? 0xFFFFFFFF : 0xFF000000, alpha));
+        outlinePaint.setStrokeWidth(dp(getContext(), 1.25f));
+        canvas.drawPath(clipPath, outlinePaint);
     }
 
     private void drawInteractionHighlight(Canvas canvas) {
-        if (interactionProgress <= 0f || glowPaint.getShader() == null) return;
-        canvas.drawRect(0, 0, getWidth(), getHeight(), glowPaint);
+        if (interactionProgress <= 0f) return;
+        interactionPaint.setShader(null);
+        interactionPaint.setColor(withAlpha(0xFFFFFFFF,
+                Math.round(20f * interactionProgress)));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), interactionPaint);
+        if (glowPaint.getShader() != null) {
+            canvas.drawRect(0, 0, getWidth(), getHeight(), glowPaint);
+        }
     }
 
     private RenderEffect renderEffect() {
         if (renderEffect != null) return renderEffect;
         try {
-            lensShader = new RuntimeShader(REFRACTION_SHADER);
-            lensShader.setFloatUniform("size", getWidth(), getHeight());
-            lensShader.setFloatUniform("offset", 0f, 0f);
-            lensShader.setFloatUniform("cornerRadii",
-                    cornerRadius, cornerRadius, cornerRadius, cornerRadius);
-            lensShader.setFloatUniform("refractionHeight",
-                    dp(getContext(), selection ? 14 : 24));
-            lensShader.setFloatUniform("refractionAmount",
-                    selection
-                            ? -dp(getContext(), 10) * interactionProgress
-                            : -dp(getContext(), 24));
-            lensShader.setFloatUniform("depthEffect", 0f);
-            lensShader.setFloatUniform("chromaticAberration",
-                    selection ? interactionProgress : 0);
-            RenderEffect lens = RenderEffect.createRuntimeShaderEffect(lensShader, "content");
+            RenderEffect saturated =
+                    RenderEffect.createColorFilterEffect(VIBRANCY_FILTER);
             if (selection) {
-                renderEffect = lens;
+                lensShader = createLensShader(dp(getContext(), 10),
+                        -dp(getContext(), 14) * interactionProgress, true);
+                renderEffect = RenderEffect.createRuntimeShaderEffect(
+                        lensShader, "content");
             } else {
-                RenderEffect blur = RenderEffect.createBlurEffect(
-                        dp(getContext(), 4), dp(getContext(), 4), Shader.TileMode.CLAMP);
-                renderEffect = RenderEffect.createChainEffect(lens, blur);
+                RenderEffect blurred = RenderEffect.createChainEffect(
+                        RenderEffect.createBlurEffect(
+                                dp(getContext(), 8), dp(getContext(), 8),
+                                Shader.TileMode.CLAMP),
+                        saturated);
+                lensShader = createLensShader(dp(getContext(), 24), -dp(getContext(), 24), false);
+                renderEffect = RenderEffect.createChainEffect(
+                        RenderEffect.createRuntimeShaderEffect(lensShader, "content"),
+                        blurred);
             }
         } catch (RuntimeException unsupported) {
             effectFailed = true;
         }
         return renderEffect;
+    }
+
+    private RuntimeShader createLensShader(float height, float amount, boolean chromatic) {
+        RuntimeShader shader = new RuntimeShader(REFRACTION_SHADER);
+        shader.setFloatUniform("size", getWidth(), getHeight());
+        shader.setFloatUniform("offset", 0f, 0f);
+        shader.setFloatUniform("cornerRadii",
+                cornerRadius, cornerRadius, cornerRadius, cornerRadius);
+        shader.setFloatUniform("refractionHeight", height);
+        shader.setFloatUniform("refractionAmount", amount);
+        shader.setFloatUniform("depthEffect", 0f);
+        shader.setFloatUniform("chromaticAberration", chromatic ? interactionProgress : 0f);
+        return shader;
     }
 
     private void captureBackdrop() {
@@ -365,6 +482,7 @@ public final class LiquidGlassContainer extends FrameLayout {
                 || !backdropSource.isAttachedToWindow()) {
             return;
         }
+        if (selection && interactionProgress <= 0f) return;
         try {
             int width = getWidth();
             int height = getHeight();
@@ -372,9 +490,11 @@ public final class LiquidGlassContainer extends FrameLayout {
             try {
                 int[] glassLocation = new int[2];
                 getLocationInWindow(glassLocation);
+                applyInverseScale(recording);
                 drawLayer(recording, backdropSource, glassLocation);
-                if (dockSurface != null) drawLayer(recording, dockSurface, glassLocation);
-                if (refractionOverlay != null) {
+                if (dockSurface != null) {
+                    drawLayer(recording, dockSurface, glassLocation);
+                } else if (refractionOverlay != null) {
                     drawLayer(recording, refractionOverlay, glassLocation);
                 }
             } finally {
@@ -388,22 +508,56 @@ public final class LiquidGlassContainer extends FrameLayout {
         }
     }
 
+    private void applyInverseScale(Canvas canvas) {
+        float scaleX = getScaleX();
+        float scaleY = getScaleY();
+        if (Math.abs(scaleX - 1f) < 0.0001f && Math.abs(scaleY - 1f) < 0.0001f) {
+            return;
+        }
+        canvas.scale(1f / scaleX, 1f / scaleY);
+    }
+
     private void drawLayer(RecordingCanvas recording, View layer, int[] glassLocation) {
         int[] location = new int[2];
         layer.getLocationInWindow(location);
         recording.save();
         recording.translate(location[0] - glassLocation[0], location[1] - glassLocation[1]);
         if (layer == dockSurface) {
-            dockSurface.drawBackdropLayer(recording);
+            dockSurface.drawDockComposition(recording);
         } else {
             layer.draw(recording);
         }
         recording.restore();
     }
 
+    private void drawDockComposition(RecordingCanvas recording) {
+        recording.save();
+        recording.clipPath(clipPath);
+        if (renderNode.hasDisplayList()) recording.drawRenderNode(renderNode);
+        drawDockSurface(recording);
+        drawOutline(recording);
+        drawHighlight(recording);
+        if (dockContent != null) {
+            int[] dockLocation = new int[2];
+            int[] contentLocation = new int[2];
+            getLocationInWindow(dockLocation);
+            dockContent.getLocationInWindow(contentLocation);
+            recording.saveLayer(null, dockContentPaint);
+            recording.translate(contentLocation[0] - dockLocation[0],
+                    contentLocation[1] - dockLocation[1]);
+            float scaleX = getScaleX();
+            float scaleY = getScaleY();
+            recording.translate(getPivotX() * (scaleX - 1f) * 0.5f,
+                    getPivotY() * (scaleY - 1f) * 0.5f);
+            dockContent.draw(recording);
+            recording.restore();
+        }
+        recording.restore();
+    }
+
     private void startTicker() {
         if (!glass || ticking || getWindowVisibility() != VISIBLE
-                || !isAttachedToWindow()) return;
+                || !isAttachedToWindow() || (selection && interactionProgress <= 0f)) return;
         ticking = true;
         postOnAnimation(backdropTick);
     }
@@ -414,47 +568,38 @@ public final class LiquidGlassContainer extends FrameLayout {
     }
 
     private void updateGeometry(int width, int height) {
+        cornerRadius = floating || selection
+                ? Math.min(width, height) * 0.5f : 0f;
         clipPath.reset();
         clipPath.addRoundRect(0, 0, width, height,
                 cornerRadius, cornerRadius, Path.Direction.CW);
 
-        int surface = ContextCompat.getColor(getContext(),
-                io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low);
+        int surface = getResources().getColor(
+                io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low,
+                getContext().getTheme());
         int base = surface & 0x00FFFFFF;
-        int tint;
         if (selection) {
-            tint = dark
-                    ? (glass ? 0x1AFFFFFF : 0xE6000000)
-                    : (glass ? 0x1A000000 : 0xF2FFFFFF);
+            solidTint = dark ? 0xE6000000 : 0xF2FFFFFF;
         } else {
-            tint = dark
-                    ? (base | (glass ? 0x66000000 : 0xFF000000))
-                    : (base | (glass ? 0x66FFFFFF : 0xFFFFFFFF));
+            solidTint = base | 0xFF000000;
         }
-        fillPaint.setShader(null);
-        fillPaint.setColor(tint);
 
-        if (glass && selection) {
-            fillPaint.setShader(null);
-            fillPaint.setColor(dark ? 0x1AFFFFFF : 0x1A000000);
-            borderShader = new LinearGradient(0, 0, 0, height,
-                    new int[]{0xFFFFFFFF, 0x54FFFFFF, 0xE6FFFFFF},
-                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP);
-        } else if (glass && floating) {
-            int top = dark ? 0x26FFFFFF : 0x52FFFFFF;
-            int middle = dark ? 0x08FFFFFF : 0x14FFFFFF;
-            int bottom = dark ? 0x20FFFFFF : 0x3CFFFFFF;
-            Shader fillShader = new LinearGradient(0, 0, 0, height,
-                    new int[]{top, middle, bottom}, null, Shader.TileMode.CLAMP);
-            fillPaint.setShader(fillShader);
-            borderShader = new LinearGradient(0, 0, 0, height,
-                    new int[]{0xFFFFFFFF, 0x54FFFFFF, 0xE6FFFFFF},
-                    new float[]{0f, 0.52f, 1f}, Shader.TileMode.CLAMP);
-        } else {
-            borderShader = null;
-        }
+        highlightShader = createHighlightShader();
+        highlightPaint.setStrokeWidth(
+                (float) Math.ceil(dp(getContext(), 0.5f)) * 2f);
         renderEffect = null;
+        lensShader = null;
         effectFailed = false;
+    }
+
+    private RuntimeShader createHighlightShader() {
+        RuntimeShader shader = new RuntimeShader(HIGHLIGHT_SHADER);
+        shader.setFloatUniform("size", getWidth(), getHeight());
+        shader.setFloatUniform("cornerRadii",
+                cornerRadius, cornerRadius, cornerRadius, cornerRadius);
+        shader.setFloatUniform("angle", (float) Math.toRadians(45f));
+        shader.setFloatUniform("falloff", 1f);
+        return shader;
     }
 
     private static int dp(Context context, float value) {

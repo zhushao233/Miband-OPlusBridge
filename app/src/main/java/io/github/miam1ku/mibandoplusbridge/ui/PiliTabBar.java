@@ -13,7 +13,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.animation.PathInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -71,9 +70,8 @@ public final class PiliTabBar extends FrameLayout {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         selectionGlass = compact && UiStyle.glass(context);
-        LayoutParams rowParams = compact
-                ? new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT)
-                : new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+        LayoutParams rowParams = new LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
 
         indicator = new LiquidGlassContainer(
                 context, backdropSource, compact, selectionGlass, true);
@@ -99,6 +97,8 @@ public final class PiliTabBar extends FrameLayout {
     public void setDockHost(LiquidGlassContainer dockHost) {
         this.dockHost = dockHost;
         indicator.setDockSurface(dockHost);
+        dockHost.setDockContent(row,
+                ContextCompat.getColor(getContext(), R.color.accent));
     }
 
     public void check(int itemId) {
@@ -121,9 +121,8 @@ public final class PiliTabBar extends FrameLayout {
             Tab tab = new Tab(getContext(), item.getItemId(), item.getTitle(), icon);
             tab.index = tabs.size();
             tabs.add(tab);
-            row.addView(tab, compact
-                    ? new LinearLayout.LayoutParams(dp(78), LayoutParams.MATCH_PARENT)
-                    : new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f));
+            row.addView(tab,
+                    new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f));
         }
     }
 
@@ -154,8 +153,8 @@ public final class PiliTabBar extends FrameLayout {
         if (animate && laidOut && Math.abs(indicator.getX() - targetX) > 0.5f) {
             indicator.animate()
                     .x(targetX)
-                    .setDuration(300)
-                    .setInterpolator(new OvershootInterpolator(0.85f))
+                    .setDuration(380)
+                    .setInterpolator(new PathInterpolator(0.2f, 0.8f, 0.2f, 1f))
                     .start();
         } else {
             indicator.setX(targetX);
@@ -167,12 +166,8 @@ public final class PiliTabBar extends FrameLayout {
         int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
         int innerHeight = getHeight() - getPaddingTop() - getPaddingBottom();
         int itemWidth = innerWidth / tabs.size();
-        int baseWidth = Math.max(0, itemWidth);
-        int baseHeight = Math.max(0, innerHeight);
-        float scaleX = selectionGlass ? PRESS_SCALE : 1f;
-        float scaleY = selectionGlass ? PRESS_SCALE : 1f;
-        int pillWidth = Math.round(baseWidth * scaleX);
-        int pillHeight = Math.round(baseHeight * scaleY);
+        int pillWidth = Math.max(0, itemWidth);
+        int pillHeight = Math.max(0, innerHeight);
 
         LayoutParams params = (LayoutParams) indicator.getLayoutParams();
         if (params.width != pillWidth || params.height != pillHeight) {
@@ -182,16 +177,13 @@ public final class PiliTabBar extends FrameLayout {
                     MeasureSpec.makeMeasureSpec(pillHeight, MeasureSpec.EXACTLY));
             indicator.layout(0, 0, pillWidth, pillHeight);
         }
-        indicator.setY(getPaddingTop() - (pillHeight - baseHeight) * 0.5f);
+        indicator.setY(getPaddingTop());
     }
 
     private float indicatorX(float fraction) {
         int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
         float itemWidth = innerWidth / (float) tabs.size();
-        float baseWidth = itemWidth;
-        float scaleX = selectionGlass ? PRESS_SCALE : 1f;
-        float left = getPaddingLeft() + fraction * itemWidth;
-        return left - (baseWidth * scaleX - baseWidth) * 0.5f;
+        return getPaddingLeft() + fraction * itemWidth;
     }
 
     private void moveIndicatorDuringDrag(float fraction) {
@@ -290,7 +282,9 @@ public final class PiliTabBar extends FrameLayout {
         if (dockHost != null) {
             float center = (tabs.size() - 1) / 2f;
             float normalized = center == 0f ? 0f : (fraction - center) / center;
-            dockHost.setDragOffset(dp(3) * normalized);
+            float eased = 1f - (1f - Math.abs(normalized)) * (1f - Math.abs(normalized));
+            float direction = normalized > 0f ? 1f : (normalized < 0f ? -1f : 0f);
+            dockHost.setDragOffset(dp(4) * direction * eased);
         }
     }
 
@@ -320,8 +314,8 @@ public final class PiliTabBar extends FrameLayout {
         pressAnimator = ValueAnimator.ofFloat(pressProgress, pressed ? 1f : 0f);
         pressAnimator.setDuration(pressed ? 140 : 260);
         pressAnimator.setInterpolator(pressed
-                ? new PathInterpolator(0.2f, 0f, 0f, 1f)
-                : new PathInterpolator(0.2f, 0f, 0f, 1f));
+                ? new PathInterpolator(0.2f, 0.7f, 0.25f, 1f)
+                : new PathInterpolator(0.2f, 0.6f, 0.2f, 1f));
         pressAnimator.addUpdateListener(animation -> {
             pressProgress = Math.max(0f, Math.min(1f,
                     (float) animation.getAnimatedValue()));
@@ -341,10 +335,8 @@ public final class PiliTabBar extends FrameLayout {
             dockHost.setInteraction(pressProgress, getX() + pressX, getY() + pressY);
         }
         if (selectionGlass) {
-            float restX = 1f / PRESS_SCALE;
-            float restY = 1f / PRESS_SCALE;
-            indicator.setScaleX(restX + (1f - restX) * pressProgress);
-            indicator.setScaleY(restY + (1f - restY) * pressProgress);
+            indicator.setScaleX(1f + (PRESS_SCALE - 1f) * pressProgress);
+            indicator.setScaleY(1f + (PRESS_SCALE - 1f) * pressProgress);
         } else {
             indicator.setScaleX(1f + 0.06f * pressProgress);
             indicator.setScaleY(1f + 0.06f * pressProgress);
@@ -353,10 +345,7 @@ public final class PiliTabBar extends FrameLayout {
         float localY = pressY - indicator.getY();
         indicator.setInteraction(pressProgress, Math.max(0f, localX),
                 Math.max(0f, localY));
-        for (int i = 0; i < tabs.size(); i++) {
-            tabs.get(i).setPressProgress(pressFeedback && i == selectedIndex
-                    ? pressProgress : 0f);
-        }
+        for (int i = 0; i < tabs.size(); i++) tabs.get(i).setPressProgress(0f);
     }
 
     @Override
@@ -391,7 +380,7 @@ public final class PiliTabBar extends FrameLayout {
             icon = new ImageView(context);
             icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
             icon.setImageDrawable(iconDrawable);
-            addView(icon, new LayoutParams(dp(24), dp(24)));
+            addView(icon, new LayoutParams(dp(28), dp(28)));
 
             label = new TextView(context);
             label.setText(title);
@@ -414,13 +403,11 @@ public final class PiliTabBar extends FrameLayout {
 
         void setActive(boolean active) {
             int color = ContextCompat.getColor(getContext(),
-                    active ? R.color.accent : R.color.on_surface_variant);
+                    active ? R.color.accent : R.color.on_surface);
             icon.setImageTintList(ColorStateList.valueOf(color));
             icon.setSelected(active);
             label.setTextColor(color);
-            label.setTypeface(active
-                    ? Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                    : Typeface.DEFAULT);
+            label.setTypeface(Typeface.DEFAULT);
             setSelected(active);
         }
 
