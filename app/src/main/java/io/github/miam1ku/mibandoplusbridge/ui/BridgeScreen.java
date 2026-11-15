@@ -139,11 +139,16 @@ public final class BridgeScreen {
                                           int checkedItemId, TabListener listener) {
         configureEdgeToEdge(activity);
 
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundResource(UiStyle.material(activity)
+        FrameLayout shell = new FrameLayout(activity);
+        shell.setClipChildren(false);
+        shell.setBackgroundResource(UiStyle.material(activity)
                 ? io.github.miam1ku.mibandoplusbridge.R.color.surface
                 : com.hchen.himiuix.R.color.miuix_theme_color);
+        FrameLayout contentRoot = new FrameLayout(activity);
+        contentRoot.setBackgroundResource(UiStyle.material(activity)
+                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
+                : com.hchen.himiuix.R.color.miuix_theme_color);
+        shell.addView(contentRoot, new FrameLayout.LayoutParams(-1, -1));
 
         MiuixAppBar appBar = new MiuixAppBar(activity);
         appBar.setTitle(title);
@@ -160,15 +165,14 @@ public final class BridgeScreen {
                 ? io.github.miam1ku.mibandoplusbridge.R.color.surface
                 : com.hchen.himiuix.R.color.miuix_theme_color);
         int topInset = pageHost.getPaddingTop();
-        pageHost.setPadding(0, topInset, 0, dp(activity, 96));
+        pageHost.setPadding(0, topInset, 0, dp(activity, 104));
         FrameLayout pageFrame = new FrameLayout(activity);
         pageFrame.setClipChildren(true);
         pageHost.addView(pageFrame, new LinearLayout.LayoutParams(-1, -2));
         scroll.addView(pageHost, new NestedScrollView.LayoutParams(-1, -2));
         appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
 
-        LinearLayout.LayoutParams appBarParams = new LinearLayout.LayoutParams(-1, 0, 1f);
-        root.addView(appBar, appBarParams);
+        contentRoot.addView(appBar, new FrameLayout.LayoutParams(-1, -1));
 
         boolean floating = UiStyle.floating(activity);
         PiliTabBar tabBar = new PiliTabBar(activity, menuRes, checkedItemId, floating);
@@ -176,29 +180,29 @@ public final class BridgeScreen {
             if (listener != null) listener.onTabSelected(itemId);
         });
 
-        View tabBarContainer = tabBarContainer(activity, tabBar, floating);
-        root.addView(tabBarContainer, tabBarContainerParams(activity, floating));
+        View tabBarContainer = tabBarContainer(activity, tabBar, floating, contentRoot);
+        shell.addView(tabBarContainer, tabBarContainerParams(activity, floating));
 
-        activity.setContentView(root);
+        activity.setContentView(shell);
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 96) + bars.bottom);
+            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 104) + bars.bottom);
             return insets;
         });
         ViewCompat.setOnApplyWindowInsetsListener(tabBarContainer, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            LinearLayout.LayoutParams params =
-                    (LinearLayout.LayoutParams) view.getLayoutParams();
+            FrameLayout.LayoutParams params =
+                    (FrameLayout.LayoutParams) view.getLayoutParams();
             if (floating) {
                 params.leftMargin = dp(activity, 16) + bars.left;
                 params.rightMargin = dp(activity, 16) + bars.right;
-                params.bottomMargin = dp(activity, 10) + bars.bottom;
+                params.bottomMargin = dp(activity, 12) + bars.bottom;
                 view.setPadding(0, 0, 0, 0);
             } else {
                 params.leftMargin = 0;
                 params.rightMargin = 0;
-                params.bottomMargin = 0;
-                view.setPadding(bars.left, 0, bars.right, bars.bottom);
+                params.bottomMargin = bars.bottom;
+                view.setPadding(bars.left, 0, bars.right, 0);
             }
             view.setLayoutParams(params);
             return insets;
@@ -284,7 +288,7 @@ public final class BridgeScreen {
             return;
         }
         switch (transition) {
-            case TAB -> fadeThrough(source, target);
+            case TAB -> slideTabs(source, target);
             case FORWARD -> slideForward(source, target);
             case BACK -> slideBack(source, target);
             default -> completePage(target);
@@ -411,37 +415,26 @@ public final class BridgeScreen {
         });
     }
 
-    private void fadeThrough(LinearLayout source, LinearLayout target) {
-        target.setAlpha(0f);
-        target.setScaleX(0.985f);
-        target.setScaleY(0.985f);
-        target.setTranslationY(dp(activity, 5));
+    private void slideTabs(LinearLayout source, LinearLayout target) {
+        boolean forward = pages.indexOf(target) > pages.indexOf(source);
+        float distance = Math.max(dp(activity, 48), pageFrame.getWidth() * 0.34f);
+        float targetStart = forward ? distance : -distance;
+        float sourceEnd = forward ? -distance * 0.45f : distance * 0.45f;
 
-        AnimatorSet out = new AnimatorSet();
-        out.playTogether(
+        target.setAlpha(0.6f);
+        target.setTranslationX(targetStart);
+        source.setAlpha(1f);
+        source.setTranslationX(0f);
+
+        AnimatorSet animation = new AnimatorSet();
+        animation.playTogether(
                 ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0f),
-                ObjectAnimator.ofFloat(source, View.SCALE_X, 1f, 0.985f),
-                ObjectAnimator.ofFloat(source, View.SCALE_Y, 1f, 0.985f));
-        out.setDuration(110);
-        out.setInterpolator(new PathInterpolator(0.4f, 0f, 1f, 1f));
-
-        AnimatorSet in = new AnimatorSet();
-        in.playTogether(
-                ObjectAnimator.ofFloat(target, View.ALPHA, 0f, 1f),
-                ObjectAnimator.ofFloat(target, View.SCALE_X, 0.985f, 1f),
-                ObjectAnimator.ofFloat(target, View.SCALE_Y, 0.985f, 1f),
-                ObjectAnimator.ofFloat(target, View.TRANSLATION_Y, dp(activity, 5), 0f));
-        in.setDuration(210);
-        in.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
-        in.addListener(new AnimatorListenerAdapter() {
-            @Override public void onAnimationStart(Animator animation) {
-                hidePage(source);
-            }
-        });
-
-        AnimatorSet whole = new AnimatorSet();
-        whole.playSequentially(out, in);
-        runPageAnimation(whole, () -> completePage(target));
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, sourceEnd),
+                ObjectAnimator.ofFloat(target, View.ALPHA, 0.6f, 1f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, targetStart, 0f));
+        animation.setDuration(280);
+        animation.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        runPageAnimation(animation, () -> completePage(target));
     }
 
     private void slideForward(LinearLayout source, LinearLayout target) {
@@ -540,75 +533,29 @@ public final class BridgeScreen {
     }
 
     private static View tabBarContainer(AppCompatActivity activity, PiliTabBar tabBar,
-                                        boolean floating) {
-        FrameLayout frame = new FrameLayout(activity);
+                                        boolean floating, View backdropSource) {
+        LiquidGlassContainer frame = new LiquidGlassContainer(
+                activity, backdropSource, floating, floating && UiStyle.glass(activity));
         if (floating) {
-            frame.setClipToOutline(true);
             frame.setElevation(dp(activity, UiStyle.glass(activity) ? 12 : 7));
-            frame.setBackground(UiStyle.glass(activity)
-                    ? floatingTabBackground(activity)
-                    : solidFloatingTabBackground(activity));
             frame.addView(tabBar, new FrameLayout.LayoutParams(-2, dp(activity, 64)));
         } else {
-            int background = UiStyle.material(activity)
-                    ? io.github.miam1ku.mibandoplusbridge.R.color.surface
-                    : com.hchen.himiuix.R.color.miuix_theme_color;
-            GradientDrawable bar = new GradientDrawable();
-            bar.setColor(ContextCompat.getColor(activity, background));
-            bar.setStroke(dp(activity, 1), ContextCompat.getColor(activity,
-                    io.github.miam1ku.mibandoplusbridge.R.color.outline_variant));
-            frame.setBackground(bar);
-            frame.setElevation(dp(activity, 3));
+            frame.setElevation(0);
             frame.addView(tabBar, new FrameLayout.LayoutParams(-1, dp(activity, 64)));
         }
         return frame;
     }
 
-    private static LinearLayout.LayoutParams tabBarContainerParams(
+    private static FrameLayout.LayoutParams tabBarContainerParams(
             AppCompatActivity activity, boolean floating) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(floating ? -2 : -1, -2);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(floating ? -2 : -1, -2);
+        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         if (floating) {
-            params.gravity = Gravity.CENTER_HORIZONTAL;
             params.leftMargin = dp(activity, 16);
             params.rightMargin = dp(activity, 16);
-            params.bottomMargin = dp(activity, 10);
+            params.bottomMargin = dp(activity, 12);
         }
         return params;
-    }
-
-    private static Drawable floatingTabBackground(Context context) {
-        boolean dark = (context.getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        int surface = ContextCompat.getColor(context,
-                io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low);
-        int variant = ContextCompat.getColor(context,
-                io.github.miam1ku.mibandoplusbridge.R.color.surface_variant);
-        int top = blend(variant, Color.WHITE, dark ? 0.06f : 0.35f);
-        int bottom = blend(surface, variant, dark ? 0.35f : 0.15f);
-        GradientDrawable glass = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{withAlpha(top, 0xF2), withAlpha(bottom, 0xE8)});
-        glass.setCornerRadius(dp(context, 32));
-        glass.setStroke(dp(context, 1), dark ? 0x33FFFFFF : 0x14000000);
-        return glass;
-    }
-
-    private static Drawable solidFloatingTabBackground(Context context) {
-        GradientDrawable solid = new GradientDrawable();
-        solid.setColor(ContextCompat.getColor(context,
-                io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low));
-        solid.setCornerRadius(dp(context, 32));
-        solid.setStroke(dp(context, 1), ContextCompat.getColor(context,
-                io.github.miam1ku.mibandoplusbridge.R.color.outline_variant));
-        return solid;
-    }
-
-    private static int blend(int first, int second, float amount) {
-        float inverse = 1f - amount;
-        return Color.rgb(
-                Math.round(Color.red(first) * inverse + Color.red(second) * amount),
-                Math.round(Color.green(first) * inverse + Color.green(second) * amount),
-                Math.round(Color.blue(first) * inverse + Color.blue(second) * amount));
     }
 
     private static void configureEdgeToEdge(AppCompatActivity activity) {

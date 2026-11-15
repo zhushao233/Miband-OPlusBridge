@@ -829,7 +829,7 @@ public final class MainActivity extends AppCompatActivity {
                 });
         if (UiStyle.floating(this)) {
             BridgeScreen.ToggleRow glass = appearancePage.switchRow(dockCard,
-                    "液态玻璃底栏", "半透明胶囊与细描边；关闭后使用实色悬浮底栏。");
+                    "液态玻璃底栏", "实时模糊后方内容并做边缘折射；关闭后使用实色悬浮底栏。");
             glass.setChecked(UiStyle.glass(this));
             glass.setOnStateChangeListener(checked -> {
                 if (UiStyle.setGlass(this, checked)) {
