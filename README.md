@@ -64,7 +64,10 @@
 
 手环连上后即可测试。
 
-首页「帮助」→ **发送调试日志**：生成本机连接日志，优先交给 QQ，也可选其他应用。日志写出阶段、型号、队列和帧类型。
+首页「帮助」→ **发送调试日志**：导出 `band-debug-<时间>.zip`，优先交给 QQ，也可选其他应用。包内是
+`band-debug.txt`（会话日志：阶段、型号、队列、帧类型）、`transport-observation.json`（最近一次连接的传输参数）
+和 `captures/*.jsonl`（最近 3 份协议采集，一行一条，`payloadBase64` 是原始帧，`tx`/`rx` 是方向）。
+协议采集在高级设置里手动开窗，120 秒后自动关闭。
 
 首页 → 高级设置 → 调试 → **拉取设备日志**：有已连接手环时，通过 Xiaomi `report.device_log_export`（2/80）请求手环导出日志，再从反向 MASS 通道接收完整日志包。原包和可识别的 zip / tar / tar.gz 内容会保存到手机 `下载/Miband-OPlusBridge/device-logs/`，完成后可直接调用系统分享。
 
