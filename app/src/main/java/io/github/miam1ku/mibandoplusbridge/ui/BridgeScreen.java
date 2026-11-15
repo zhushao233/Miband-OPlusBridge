@@ -175,7 +175,8 @@ public final class BridgeScreen {
         contentRoot.addView(appBar, new FrameLayout.LayoutParams(-1, -1));
 
         boolean floating = UiStyle.floating(activity);
-        PiliTabBar tabBar = new PiliTabBar(activity, menuRes, checkedItemId, floating);
+        PiliTabBar tabBar = new PiliTabBar(
+                activity, menuRes, checkedItemId, floating, contentRoot);
         tabBar.setOnTabSelectedListener(itemId -> {
             if (listener != null) listener.onTabSelected(itemId);
         });

@@ -1,5 +1,6 @@
 package io.github.miam1ku.mibandoplusbridge.ui;
 
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
@@ -31,47 +32,66 @@ import java.util.List;
  * tabs, the sliding selection pill, and keeps icon/text colours consistent.
  */
 public final class PiliTabBar extends FrameLayout {
+    private static final float PRESS_SCALE_X = 1.40f;
+    private static final float PRESS_SCALE_Y = 1.60f;
     public interface OnTabSelectedListener {
         void onTabSelected(int itemId);
     }
 
     private final boolean compact;
+    private final boolean selectionGlass;
     private final LinearLayout row;
-    private final View indicator;
+    private final LiquidGlassContainer indicator;
     private final List<Tab> tabs = new ArrayList<>();
     private final int touchSlop;
     private int selectedIndex;
     private boolean laidOut;
     private boolean dragging;
     private boolean pressFeedback;
+    private boolean iconsRefracted;
     private float downX;
     private float downY;
     private float dragStartFraction;
+    private float pressProgress;
+    private float pressX;
+    private float pressY;
     private int dragStartIndex;
+    private ValueAnimator pressAnimator;
     private LiquidGlassContainer dockHost;
     private OnTabSelectedListener listener;
 
-    public PiliTabBar(Context context, @MenuRes int menuRes, int checkedItemId, boolean compact) {
+    public PiliTabBar(Context context, @MenuRes int menuRes, int checkedItemId,
+                      boolean compact, View backdropSource) {
         super(context);
         this.compact = compact;
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
         setClipToPadding(false);
+        setClipChildren(false);
         setPadding(dp(4), dp(4), dp(4), dp(4));
-
-        indicator = new View(context);
-        indicator.setBackground(BridgeScreen.roundedRect(selectionColor(context), dp(28), 0, 0));
-        indicator.setElevation(dp(2));
-        addView(indicator, new LayoutParams(dp(1), dp(1)));
 
         row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        addView(row, compact
+        selectionGlass = compact && UiStyle.glass(context);
+        LayoutParams rowParams = compact
                 ? new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT)
-                : new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+                : new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+
+        indicator = new LiquidGlassContainer(
+                context, backdropSource, compact, selectionGlass, true);
+        if (selectionGlass) {
+            addView(row, rowParams);
+            addView(indicator, new LayoutParams(dp(1), dp(1)));
+            row.bringToFront();
+        } else {
+            row.setElevation(dp(1));
+            addView(indicator, new LayoutParams(dp(1), dp(1)));
+            addView(row, rowParams);
+        }
 
         inflateMenu(menuRes);
         select(indexOf(checkedItemId), false);
+        applyPressProgress();
     }
 
     public void setOnTabSelectedListener(OnTabSelectedListener listener) {
@@ -80,6 +100,7 @@ public final class PiliTabBar extends FrameLayout {
 
     public void setDockHost(LiquidGlassContainer dockHost) {
         this.dockHost = dockHost;
+        indicator.setDockSurface(dockHost);
     }
 
     public void check(int itemId) {
@@ -148,21 +169,33 @@ public final class PiliTabBar extends FrameLayout {
         int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
         int innerHeight = getHeight() - getPaddingTop() - getPaddingBottom();
         int itemWidth = innerWidth / tabs.size();
+        int horizontalInset = dp(2);
         int inset = dp(4);
-        int pillWidth = Math.max(0, itemWidth - inset * 2);
-        int pillHeight = Math.max(0, innerHeight - inset * 2);
+        int baseWidth = Math.max(0, itemWidth - horizontalInset * 2);
+        int baseHeight = Math.max(0, innerHeight - inset * 2);
+        float scaleX = selectionGlass ? PRESS_SCALE_X : 1f;
+        float scaleY = selectionGlass ? PRESS_SCALE_Y : 1f;
+        int pillWidth = Math.round(baseWidth * scaleX);
+        int pillHeight = Math.round(baseHeight * scaleY);
 
         LayoutParams params = (LayoutParams) indicator.getLayoutParams();
-        params.width = pillWidth;
-        params.height = pillHeight;
-        indicator.setLayoutParams(params);
-        indicator.setY(getPaddingTop() + inset);
+        if (params.width != pillWidth || params.height != pillHeight) {
+            indicator.setLayoutParams(new LayoutParams(pillWidth, pillHeight));
+            indicator.measure(
+                    MeasureSpec.makeMeasureSpec(pillWidth, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(pillHeight, MeasureSpec.EXACTLY));
+            indicator.layout(0, 0, pillWidth, pillHeight);
+        }
+        indicator.setY(getPaddingTop() + inset - (pillHeight - baseHeight) * 0.5f);
     }
 
     private float indicatorX(float fraction) {
         int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
         float itemWidth = innerWidth / (float) tabs.size();
-        return getPaddingLeft() + fraction * itemWidth + dp(4);
+        float baseWidth = itemWidth - dp(4);
+        float scaleX = selectionGlass ? PRESS_SCALE_X : 1f;
+        float left = getPaddingLeft() + fraction * itemWidth + dp(2);
+        return left - (baseWidth * scaleX - baseWidth) * 0.5f;
     }
 
     private void moveIndicatorDuringDrag(float fraction) {
@@ -170,13 +203,15 @@ public final class PiliTabBar extends FrameLayout {
         updateIndicatorGeometry();
         indicator.animate().cancel();
         indicator.setX(indicatorX(fraction));
-        indicator.setScaleX(1.04f);
-        indicator.setScaleY(1.04f);
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
-        if (action == MotionEvent.ACTION_DOWN) setPressFeedback(true);
+        if (action == MotionEvent.ACTION_DOWN) {
+            pressX = event.getX();
+            pressY = event.getY();
+            setPressFeedback(true);
+        }
         boolean handled = super.dispatchTouchEvent(event);
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             setPressFeedback(false);
@@ -199,8 +234,10 @@ public final class PiliTabBar extends FrameLayout {
                 float dy = event.getY() - downY;
                 if (!dragging && Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy)) {
                     dragging = true;
+                    pressX = event.getX();
+                    pressY = event.getY();
                     getParent().requestDisallowInterceptTouchEvent(true);
-                    updateDrag(dx);
+                    updateDrag(dx, pressX, pressY);
                     return true;
                 }
                 return false;
@@ -214,7 +251,9 @@ public final class PiliTabBar extends FrameLayout {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_MOVE:
                 if (dragging) {
-                    updateDrag(event.getX() - downX);
+                    pressX = event.getX();
+                    pressY = event.getY();
+                    updateDrag(pressX - downX, pressX, pressY);
                     return true;
                 }
                 break;
@@ -236,7 +275,7 @@ public final class PiliTabBar extends FrameLayout {
         return super.onTouchEvent(event);
     }
 
-    private void updateDrag(float dx) {
+    private void updateDrag(float dx, float currentX, float currentY) {
         if (tabs.isEmpty() || getWidth() == 0) return;
         int innerWidth = getWidth() - getPaddingLeft() - getPaddingRight();
         float itemWidth = innerWidth / (float) tabs.size();
@@ -249,6 +288,9 @@ public final class PiliTabBar extends FrameLayout {
             performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
         }
         moveIndicatorDuringDrag(fraction);
+        pressX = currentX;
+        pressY = currentY;
+        applyPressProgress();
         if (dockHost != null) {
             float center = (tabs.size() - 1) / 2f;
             float normalized = center == 0f ? 0f : (fraction - center) / center;
@@ -278,27 +320,60 @@ public final class PiliTabBar extends FrameLayout {
 
     private void setPressFeedback(boolean pressed) {
         pressFeedback = pressed;
-        if (dockHost != null) dockHost.animatePress(pressed);
-        for (int index = 0; index < tabs.size(); index++) {
-            tabs.get(index).animatePressScale(pressed && index == selectedIndex);
+        if (pressed) setIconRefraction(true);
+        if (pressAnimator != null) pressAnimator.cancel();
+        pressAnimator = ValueAnimator.ofFloat(pressProgress, pressed ? 1f : 0f);
+        pressAnimator.setDuration(pressed ? 150 : 320);
+        pressAnimator.setInterpolator(pressed
+                ? new PathInterpolator(0.2f, 0f, 0f, 1f)
+                : new OvershootInterpolator(0.9f));
+        pressAnimator.addUpdateListener(animation -> {
+            pressProgress = Math.max(0f, Math.min(1f,
+                    (float) animation.getAnimatedValue()));
+            applyPressProgress();
+            if (!pressFeedback && pressProgress <= 0.001f) setIconRefraction(false);
+        });
+        pressAnimator.start();
+    }
+
+    private void setIconRefraction(boolean enabled) {
+        if (!selectionGlass || iconsRefracted == enabled) return;
+        iconsRefracted = enabled;
+        if (enabled) {
+            indicator.setRefractionOverlay(row);
+            indicator.bringToFront();
+        } else {
+            indicator.setRefractionOverlay(null);
+            row.bringToFront();
         }
-        indicator.animate().cancel();
-        indicator.animate()
-                .scaleX(pressed ? 1.06f : 1f)
-                .scaleY(pressed ? 1.06f : 1f)
-                .setDuration(pressed ? 120 : 240)
-                .setInterpolator(pressed
-                        ? new PathInterpolator(0.2f, 0f, 0f, 1f)
-                        : new OvershootInterpolator(0.8f))
-                .start();
     }
 
     private void applyActiveTabs() {
         for (int i = 0; i < tabs.size(); i++) tabs.get(i).setActive(i == selectedIndex);
-        if (pressFeedback && selectedIndex >= 0 && selectedIndex < tabs.size()) {
-            for (int i = 0; i < tabs.size(); i++) {
-                tabs.get(i).animatePressScale(i == selectedIndex);
-            }
+        if (pressFeedback) applyPressProgress();
+    }
+
+    private void applyPressProgress() {
+        if (dockHost != null) {
+            dockHost.setFloatingPressScale(pressProgress);
+            dockHost.setInteraction(pressProgress, getX() + pressX, getY() + pressY);
+        }
+        if (selectionGlass) {
+            float restX = 1f / PRESS_SCALE_X;
+            float restY = 1f / PRESS_SCALE_Y;
+            indicator.setScaleX(restX + (1f - restX) * pressProgress);
+            indicator.setScaleY(restY + (1f - restY) * pressProgress);
+        } else {
+            indicator.setScaleX(1f + 0.06f * pressProgress);
+            indicator.setScaleY(1f + 0.06f * pressProgress);
+        }
+        float localX = pressX - indicator.getX();
+        float localY = pressY - indicator.getY();
+        indicator.setInteraction(pressProgress, Math.max(0f, localX),
+                Math.max(0f, localY));
+        for (int i = 0; i < tabs.size(); i++) {
+            tabs.get(i).setPressProgress(pressFeedback && i == selectedIndex
+                    ? pressProgress : 0f);
         }
     }
 
@@ -311,6 +386,7 @@ public final class PiliTabBar extends FrameLayout {
     @Override
     protected void onDetachedFromWindow() {
         indicator.animate().cancel();
+        if (pressAnimator != null) pressAnimator.cancel();
         super.onDetachedFromWindow();
     }
 
@@ -327,6 +403,7 @@ public final class PiliTabBar extends FrameLayout {
             setGravity(Gravity.CENTER);
             setClickable(true);
             setFocusable(true);
+            setDefaultFocusHighlightEnabled(false);
             setContentDescription(title);
 
             icon = new ImageView(context);
@@ -365,25 +442,11 @@ public final class PiliTabBar extends FrameLayout {
             setSelected(active);
         }
 
-        void animatePressScale(boolean pressed) {
-            animate().cancel();
-            animate()
-                    .scaleX(pressed ? 1.12f : 1f)
-                    .scaleY(pressed ? 1.12f : 1f)
-                    .setDuration(pressed ? 120 : 240)
-                    .setInterpolator(pressed
-                            ? new PathInterpolator(0.2f, 0f, 0f, 1f)
-                            : new OvershootInterpolator(0.7f))
-                    .start();
+        void setPressProgress(float progress) {
+            float scale = 1f + 0.2f * progress;
+            setScaleX(scale);
+            setScaleY(scale);
         }
-    }
-
-    private static int selectionColor(Context context) {
-        boolean dark = (context.getResources().getConfiguration().uiMode
-                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
-                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-        int color = ContextCompat.getColor(context, R.color.on_surface);
-        return (color & 0x00FFFFFF) | ((dark ? 0x26 : 0x1F) << 24);
     }
 
     private int dp(int value) {
