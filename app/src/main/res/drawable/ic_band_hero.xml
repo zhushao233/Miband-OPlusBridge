@@ -6,12 +6,15 @@
     android:viewportHeight="128">
     <path
         android:fillColor="@color/band_art_body"
-        android:pathData="M19,3h34c9.4,0 17,7.6 17,17v88c0,9.4 -7.6,17 -17,17H19c-9.4,0 -17,-7.6 -17,-17V20C2,10.6 9.6,3 19,3z"
+        android:pathData="M27,2h18c3.3,0 6,2.7 6,6v20H21V8c0,-3.3 2.7,-6 6,-6zM27,100h18c3.3,0 6,2.7 6,6v20H21v-20c0,-3.3 2.7,-6 6,-6z" />
+    <path
+        android:fillColor="@color/band_art_body"
+        android:pathData="M20,25h32c8.8,0 16,7.2 16,16v46c0,8.8 -7.2,16 -16,16H20c-8.8,0 -16,-7.2 -16,-16V41c0,-8.8 7.2,-16 16,-16z"
         android:strokeColor="@color/band_art_outline"
-        android:strokeWidth="5" />
+        android:strokeWidth="4" />
     <path
         android:fillColor="@color/band_art_screen"
-        android:pathData="M17,13h38c4.4,0 8,3.6 8,8v86c0,4.4 -3.6,8 -8,8H17c-4.4,0 -8,-3.6 -8,-8V21c0,-4.4 3.6,-8 8,-8z" />
+        android:pathData="M20,35h32c4.4,0 8,3.6 8,8v42c0,4.4 -3.6,8 -8,8H20c-4.4,0 -8,-3.6 -8,-8V43c0,-4.4 3.6,-8 8,-8z" />
     <path
         android:fillColor="#66FFFFFF"
         android:pathData="M18,15h36c3.3,0 6,2.7 6,6v14H12V21c0,-3.3 2.7,-6 6,-6z" />

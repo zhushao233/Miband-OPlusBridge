@@ -28,11 +28,11 @@ import androidx.core.widget.NestedScrollView;
 import com.hchen.himiuix.MiuixAppBar;
 import com.hchen.himiuix.MiuixBasicView;
 import com.hchen.himiuix.MiuixBottomNavigatorView;
-import com.hchen.himiuix.MiuixSwitchView;
 import com.hchen.himiuix.MiuixViewGroup;
 import com.hchen.himiuix.fill.MiuixFillView;
 import com.hchen.himiuix.helper.WindowInsetsHelper;
 import com.hchen.himiuix.widget.MiuixTextView;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -145,7 +145,7 @@ public final class BridgeScreen {
                 ? io.github.miam1ku.mibandoplusbridge.R.color.surface
                 : com.hchen.himiuix.R.color.miuix_theme_color);
         int topInset = pageHost.getPaddingTop();
-        pageHost.setPadding(0, topInset, 0, dp(activity, 24));
+        pageHost.setPadding(0, topInset, 0, dp(activity, 96));
         scroll.addView(pageHost, new NestedScrollView.LayoutParams(-1, -2));
         appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
 
@@ -167,7 +167,7 @@ public final class BridgeScreen {
         activity.setContentView(root);
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 24));
+            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 96));
             return insets;
         });
         appBar.post(() -> {
@@ -424,6 +424,9 @@ public final class BridgeScreen {
         boolean material = UiStyle.material(activity);
         nativeCard.setRadius(dp(activity, material ? 14 : 22));
         nativeCard.setCardElevation(dp(activity, material ? 1 : 0));
+        if (card.content != null) {
+            card.content.setPadding(0, dp(activity, 10), 0, dp(activity, 6));
+        }
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.bottomMargin = dp(activity, 4);
         parent.addView(card, params);
@@ -481,13 +484,11 @@ public final class BridgeScreen {
                 : color(com.hchen.himiuix.R.color.miuix_summary_color));
     }
 
-    /** Miuix switch row with its caption as the native summary. */
-    public MiuixSwitchView switchRow(LinearLayout parent, String title, String caption) {
-        MiuixSwitchView toggle = new MiuixSwitchView(activity);
-        toggle.setTitle(title);
-        toggle.setSummary(caption);
-        parent.addView(toggle, new LinearLayout.LayoutParams(-1, -2));
-        return toggle;
+    /** Text row with a Material switch that remains correct when built inside a hidden page. */
+    public ToggleRow switchRow(LinearLayout parent, String title, String caption) {
+        ToggleRow row = new ToggleRow(activity, title, caption);
+        parent.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        return row;
     }
 
     // ---- actions ----
@@ -554,6 +555,78 @@ public final class BridgeScreen {
         LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) last.getLayoutParams();
         params.bottomMargin = dp(activity, space);
         last.setLayoutParams(params);
+    }
+
+    public static final class ToggleRow extends LinearLayout {
+        public interface OnStateChangeListener {
+            boolean onStateChange(boolean checked);
+        }
+
+        private final MaterialSwitch toggle;
+        private boolean updating;
+
+        ToggleRow(Context context, String title, String summary) {
+            super(context);
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+            setPadding(dp(context, 20), dp(context, 14), dp(context, 16), dp(context, 14));
+            setClickable(true);
+
+            LinearLayout copy = new LinearLayout(context);
+            copy.setOrientation(VERTICAL);
+            addView(copy, new LayoutParams(0, -2, 1f));
+
+            TextView titleView = new MiuixTextView(context);
+            titleView.setText(title);
+            titleView.setTextSize(16);
+            titleView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            titleView.setTextColor(ContextCompat.getColor(context,
+                    com.hchen.himiuix.R.color.miuix_title_color));
+            copy.addView(titleView, new LayoutParams(-1, -2));
+
+            TextView summaryView = new MiuixTextView(context);
+            summaryView.setText(summary);
+            summaryView.setTextSize(13);
+            summaryView.setTextColor(ContextCompat.getColor(context,
+                    com.hchen.himiuix.R.color.miuix_summary_color));
+            summaryView.setLineSpacing(0, 1.15f);
+            LayoutParams summaryParams = new LayoutParams(-1, -2);
+            summaryParams.topMargin = dp(context, 3);
+            copy.addView(summaryView, summaryParams);
+
+            toggle = new MaterialSwitch(context);
+            int on = ContextCompat.getColor(context, com.hchen.himiuix.R.color.miuix_switch_on);
+            int off = ContextCompat.getColor(context, com.hchen.himiuix.R.color.miuix_switch_off);
+            toggle.setTrackTintList(new ColorStateList(
+                    new int[][]{{android.R.attr.state_checked}, {}},
+                    new int[]{on, off}));
+            toggle.setThumbTintList(ColorStateList.valueOf(Color.WHITE));
+            LayoutParams toggleParams = new LayoutParams(-2, -2);
+            toggleParams.leftMargin = dp(context, 14);
+            addView(toggle, toggleParams);
+
+            setOnClickListener(view -> toggle.toggle());
+        }
+
+        public void setChecked(boolean checked) {
+            updating = true;
+            toggle.setChecked(checked);
+            updating = false;
+        }
+
+        public boolean isChecked() {
+            return toggle.isChecked();
+        }
+
+        public void setOnStateChangeListener(OnStateChangeListener listener) {
+            toggle.setOnCheckedChangeListener((button, checked) -> {
+                if (updating || listener == null) return;
+                if (listener.onStateChange(checked)) return;
+                updating = true;
+                button.setChecked(!checked);
+                updating = false;
+            });
+        }
     }
 
     public static final class ActionRow extends MiuixTextView {

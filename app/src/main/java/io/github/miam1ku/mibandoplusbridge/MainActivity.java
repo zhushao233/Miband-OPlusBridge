@@ -29,7 +29,6 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.hchen.himiuix.MiuixBasicView;
-import com.hchen.himiuix.MiuixSwitchView;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
@@ -98,8 +97,8 @@ public final class MainActivity extends AppCompatActivity {
     private TextView unboundSub;
     private TextView unboundCta;
     private BridgeScreen.ActionRow syncButton;
-    private LinearLayout statusNotice;
     private TextView statusNoticeText;
+    private TextView unboundStatusText;
 
     private TextView setupTitle;
     private TextView stepRoot;
@@ -113,7 +112,7 @@ public final class MainActivity extends AppCompatActivity {
     private LinearLayout notifyNotice;
     private LinearLayout healthAccessNotice;
 
-    private MiuixSwitchView sleepPause;
+    private BridgeScreen.ToggleRow sleepPause;
     private MiuixBasicView deviceDetailRow;
     private MiuixBasicView appearanceRow;
     private MiuixBasicView permissionRow;
@@ -250,7 +249,6 @@ public final class MainActivity extends AppCompatActivity {
 
     private void buildDeviceTab() {
         buildHero();
-        buildStatusNotice();
         buildNotices();
         buildUnbound();
     }
@@ -293,6 +291,12 @@ public final class MainActivity extends AppCompatActivity {
         batteryValue = metric(meta, "电量");
         lastSyncValue = metric(meta, "上次同步");
 
+        statusNoticeText = text(13, R.color.on_surface_variant, false);
+        statusNoticeText.setLineSpacing(0, 1.2f);
+        statusNoticeText.setText("设备登记已保留，连接稍后继续。");
+        addWithMargins(card, statusNoticeText, 16, 0, 16, 10);
+        statusNoticeText.setVisibility(View.GONE);
+
         syncButton = devicePage.filled(card, "同步剩余项目", this::syncNow);
     }
 
@@ -309,12 +313,6 @@ public final class MainActivity extends AppCompatActivity {
         value.setText("—");
         column.addView(value, textParams(0, 0, 0, 0));
         return value;
-    }
-
-    private void buildStatusNotice() {
-        statusNotice = devicePage.noticeCard(Tone.NEUTRAL);
-        statusNoticeText = devicePage.bodyText(statusNotice, "");
-        statusNotice.setVisibility(View.GONE);
     }
 
     private void buildNotices() {
@@ -358,6 +356,11 @@ public final class MainActivity extends AppCompatActivity {
         unboundSub = devicePage.caption(card,
                 "从小米运动健康的本地数据库导入绑定。密钥和健康历史只保存在本机。");
         unboundSub.setTextSize(14);
+
+        unboundStatusText = text(13, R.color.on_surface_variant, false);
+        unboundStatusText.setLineSpacing(0, 1.2f);
+        addWithMargins(card, unboundStatusText, 16, 0, 16, 10);
+        unboundStatusText.setVisibility(View.GONE);
 
         unboundCta = text(14, R.color.accent, true);
         unboundCta.setText("开始首次设置  ›");
@@ -454,8 +457,14 @@ public final class MainActivity extends AppCompatActivity {
 
     private void showStatus(String message) {
         boolean visible = message != null && !message.isBlank();
-        statusNotice.setVisibility(visible ? View.VISIBLE : View.GONE);
-        statusNoticeText.setText(visible ? message : "");
+        if (statusNoticeText != null) {
+            statusNoticeText.setVisibility(visible ? View.VISIBLE : View.GONE);
+            statusNoticeText.setText(visible ? message : "");
+        }
+        if (unboundStatusText != null) {
+            unboundStatusText.setVisibility(visible ? View.VISIBLE : View.GONE);
+            unboundStatusText.setText(visible ? message : "");
+        }
     }
 
     private void hideStatus() {
@@ -474,7 +483,7 @@ public final class MainActivity extends AppCompatActivity {
         MiuixBasicView weather = toolsPage.navRow(links, "天气同步",
                 () -> startActivity(new Intent(this, WeatherActivity.class)));
         weather.setSummary("位置天气、城市关联");
-        weather.setIcon(R.drawable.ic_nearby);
+        weather.setIcon(R.drawable.ic_weather);
 
         toolsPage.heading("使用习惯");
         LinearLayout habit = toolsPage.card();
@@ -510,7 +519,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout appearance = settingsPage.card();
         appearanceRow = settingsPage.navRow(appearance, "主题与布局",
                 () -> showSecondaryPage(appearancePage, "主题与布局", this::refreshSettingsRows));
-        appearanceRow.setIcon(R.drawable.ic_tab_settings);
+        appearanceRow.setIcon(R.drawable.ic_settings);
 
         settingsPage.heading("应用权限");
         LinearLayout permissions = settingsPage.card();
@@ -535,7 +544,7 @@ public final class MainActivity extends AppCompatActivity {
             showSecondaryPage(debugPage, "调试与日志", this::refreshDevice);
         });
         debug.setSummary("协议测试、诊断与发送日志");
-        debug.setIcon(R.drawable.ic_startup);
+        debug.setIcon(R.drawable.ic_debug);
         MiuixBasicView restore = settingsPage.navRow(advanced, "恢复小米运动健康", this::confirmRestore);
         restore.setSummary("交接连接，保留本机历史");
         restore.setTip("需确认");
@@ -551,8 +560,6 @@ public final class MainActivity extends AppCompatActivity {
     private void refreshSettingsRows() {
         if (appearanceRow == null) return;
         appearanceRow.setSummary(UiStyle.summary(this));
-        boolean nearby = hasBluetoothPermission();
-        permissionRow.setTip(nearby ? "已授权" : "待授权");
     }
 
     private void confirmRestore() {
@@ -688,14 +695,9 @@ public final class MainActivity extends AppCompatActivity {
     // ---- debug and permissions ----
 
     private void buildDebugPage() {
-        debugPage.heading("支持");
-        LinearLayout support = debugPage.card();
-        debugPage.navRow(support, "发送调试日志", this::shareDebugLog);
-        debugPage.navRow(support, "系统权限设置", () -> startActivity(new Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
-
         debugPage.heading("协议与诊断");
         LinearLayout protocol = debugPage.card();
+        debugPage.navRow(protocol, "发送桥接调试日志", this::shareDebugLog);
         debugPage.navRow(protocol, "拉取设备日志",
                 () -> startActivity(new Intent(this, DeviceLogActivity.class)));
         debugPage.navRow(protocol, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
@@ -945,7 +947,7 @@ public final class MainActivity extends AppCompatActivity {
                 main.post(() -> {
                     if (isDestroyed()) return;
                     if (qq.resolveActivity(getPackageManager()) != null) startActivity(qq);
-                    else startActivity(Intent.createChooser(send, "发送调试日志"));
+                    else startActivity(Intent.createChooser(send, "发送桥接调试日志"));
                 });
             } catch (Exception failure) {
                 main.post(() -> {

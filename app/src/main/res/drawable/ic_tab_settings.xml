@@ -2,9 +2,142 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@color/tab_icon_tint"
-        android:pathData="M12,8.2a3.8,3.8 0,1 0,0 7.6a3.8,3.8 0,1 0,0 -7.6zM12,10.2a1.8,1.8 0,1 1,0 3.6a1.8,1.8 0,1 1,0 -3.6zM10.8,2h2.4l0.5,2.1c0.5,0.2 1,0.4 1.4,0.8l2.1,-0.6l1.2,2.1l-1.5,1.5c0.1,0.5 0.1,1.1 0,1.6l1.5,1.5l-1.2,2.1l-2.1,-0.6c-0.4,0.3 -0.9,0.6 -1.4,0.8L13.2,22h-2.4l-0.5,-2.1c-0.5,-0.2 -1,-0.4 -1.4,-0.8l-2.1,0.6l-1.2,-2.1l1.5,-1.5c-0.1,-0.5 -0.1,-1.1 0,-1.6L5.6,7l1.2,-2.1l2.1,0.6c0.4,-0.3 0.9,-0.6 1.4,-0.8z" />
+    android:viewportWidth="55.9671"
+    android:viewportHeight="56.0447">
+    <group android:translateX="-212.016" android:translateY="-151.978">
+        <path
+            android:pathData="M222.37316,190.74173c-5.86265,-9.79045 -2.67853,-22.47981 7.11193,-28.34248c9.79045,-5.86265 22.47981,-2.67853 28.34248,7.11193c5.86265,9.79045 2.67853,22.47981 -7.11193,28.34248c-9.79045,5.86265 -22.47981,2.67853 -28.34248,-7.11193z"
+            android:strokeColor="@color/tab_icon_tint"
+            android:strokeWidth="5"
+            android:strokeLineCap="butt"
+            />
+        <path
+            android:pathData="M237.066,181.94346c-1.0035,-1.67582 -0.45847,-3.84784 1.21734,-4.85135c1.67582,-1.0035 3.84784,-0.45847 4.85135,1.21734c1.0035,1.67582 0.45847,3.84784 -1.21734,4.85135c-1.67582,1.0035 -3.84784,0.45847 -4.85135,-1.21734z"
+            android:strokeColor="@color/tab_icon_tint"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="butt"
+            />
+        <path
+            android:pathData="M238.24338,176.48588l-7.82261,-14.60084"
+            android:strokeColor="@color/tab_icon_tint"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            />
+        <path
+            android:pathData="M237.84914,183.76694l-7.40829,12.33994"
+            android:strokeColor="@color/tab_icon_tint"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            />
+        <path
+            android:pathData="M259.70757,180.26254l-15.64268,-0.09105"
+            android:strokeColor="@color/tab_icon_tint"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            />
+        <path
+            android:pathData="M231.55267,198.73639l-3.96322,-2.42988c0,0 2.40754,-2.82667 3.00102,-2.4628c0.64047,0.39267 1.40119,0.85908 1.79584,1.10104c0.34329,0.21047 -0.83364,3.79165 -0.83364,3.79165z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M260.47907,177.9608l-0.06562,4.64833c0,0 -3.65971,-0.62674 -3.64989,-1.3228c0.0106,-0.75118 0.02319,-1.64342 0.02973,-2.10627c0.00569,-0.40264 3.68577,-1.21927 3.68577,-1.21927z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M228.7207,163.58338l4.13591,-2.12266c0,0 1.16334,3.52603 0.544,3.8439c-0.66837,0.34304 -1.46224,0.75046 -1.87408,0.96183c-0.35826,0.18386 -2.80582,-2.68307 -2.80582,-2.68307z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M236.50669,175.67406c0.41161,-0.21182 1.20502,-0.62011 1.87301,-0.96386c0.61897,-0.31853 2.60335,2.29735 2.60335,2.29735l-4.13354,2.12715c0,0 -0.70086,-3.27639 -0.34282,-3.46064z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M238.03811,185.51623c-0.39177,-0.24658 -1.14694,-0.72188 -1.78275,-1.12205c-0.58915,-0.37081 0.69878,-3.51066 0.69878,-3.51066l3.93435,2.47625c0,0 -2.50959,2.37097 -2.85037,2.15648z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M245.6991,179.10558c-0.01,0.4628 -0.02928,1.35492 -0.04551,2.10601c-0.01504,0.69598 -3.25698,1.20107 -3.25698,1.20107l0.10043,-4.64772c0,0 3.21075,0.93807 3.20205,1.34064z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M239.53149,158.00318l2.60361,-6.02554l3.64521,0.82055l0.04395,6.62152z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M246.30865,158.52672l4.04578,-5.16891l3.31822,1.71764l-1.63572,6.41645z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M252.50479,161.3911l5.65753,-3.3284l2.45877,2.8134l-3.8717,5.37182z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M257.77207,166.59552l6.45302,-1.20187l1.3532,3.48278l-5.47018,3.73144z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M260.63599,172.5882l6.56361,0.0698l0.65355,3.67882l-6.08893,2.60216z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M261.74745,178.99796l6.2361,2.04865l-0.48791,3.70443l-6.59049,0.64192z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M261.55838,184.73115l5.41943,3.70349l-1.49974,3.42222l-6.5087,-1.2179z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M257.78349,192.17421l3.8335,5.32824l-2.57592,2.70656l-5.70442,-3.36245z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M253.5938,197.06934l2.17276,6.19394l-3.23541,1.86895l-4.52268,-4.83651z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M247.21953,200.93022l-0.3351,6.55543l-3.70224,0.50428l-2.35386,-6.18916z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M227.71859,161.76965l-1.45283,-6.46032l3.36565,-1.62271l3.89734,5.28172z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M222.48144,165.26332l-2.81701,-5.99257l2.93453,-2.31287l4.94839,4.3127z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M219.1967,171.77294l-4.73755,-4.62624l1.93851,-3.19422l6.1455,2.30624z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M217.84408,178.48374l-5.80406,-3.18738l1.01157,-3.59689l6.53876,0.57493z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M219.2658,185.61525l-6.61113,-0.37332l-0.63817,-3.68152l6.14761,-2.3006z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M221.60982,192.09178l-6.47191,1.40027l-1.59531,-3.37874l5.31322,-3.85429z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M225.56215,196.84698l-5.82638,3.14638l-2.47272,-2.80115l4.03042,-5.18089z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M232.59598,200.94506l-4.3276,5.01182l-3.30688,-1.73937l1.92578,-6.27513z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M240.30108,201.6836l-1.9148,6.33876l-3.72846,-0.24386l-0.79323,-6.51588z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+        <path
+            android:pathData="M233.77531,159.21637l0.30712,-6.5568l3.82383,-0.53748l2.25648,6.19645z"
+            android:fillColor="@color/tab_icon_tint"
+            />
+    </group>
 </vector>
