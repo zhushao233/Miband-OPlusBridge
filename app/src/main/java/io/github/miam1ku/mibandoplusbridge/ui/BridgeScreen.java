@@ -11,7 +11,9 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
@@ -25,11 +27,14 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.core.widget.NestedScrollView;
 import com.hchen.himiuix.MiuixAppBar;
 import com.hchen.himiuix.MiuixBasicView;
+import com.hchen.himiuix.MiuixBottomNavigatorView;
 import com.hchen.himiuix.MiuixSwitchView;
 import com.hchen.himiuix.MiuixViewGroup;
 import com.hchen.himiuix.fill.MiuixFillView;
 import com.hchen.himiuix.helper.WindowInsetsHelper;
 import com.hchen.himiuix.widget.MiuixTextView;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Shared HiMiuix layout for every bridge screen.
@@ -42,14 +47,34 @@ public final class BridgeScreen {
     /** Position of a setup step relative to the current one. */
     public enum StepState { DONE, CURRENT, LATER }
 
+    /** Receives the menu resource id of the selected main tab. */
+    public interface TabListener { void onTabSelected(int itemId); }
+
     private enum ActionStyle { FILLED, OUTLINED, TEXT, DANGER }
 
     public final LinearLayout body;
     private final AppCompatActivity activity;
+    private final MiuixAppBar appBar;
+    private final NestedScrollView scroll;
+    private final MiuixBottomNavigatorView tabBar;
+    private final View tabBarContainer;
+    private final MiuixFillView pageHost;
+    private final List<LinearLayout> pages = new ArrayList<>();
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body) {
+        this(activity, body, null, null, null, null, null);
+    }
+
+    private BridgeScreen(AppCompatActivity activity, LinearLayout body, MiuixAppBar appBar,
+                         NestedScrollView scroll, MiuixFillView pageHost,
+                         MiuixBottomNavigatorView tabBar, View tabBarContainer) {
         this.activity = activity;
         this.body = body;
+        this.appBar = appBar;
+        this.scroll = scroll;
+        this.pageHost = pageHost;
+        this.tabBar = tabBar;
+        this.tabBarContainer = tabBarContainer;
     }
 
     public static BridgeScreen attach(AppCompatActivity activity, String title, boolean back) {
@@ -89,6 +114,146 @@ public final class BridgeScreen {
             appBar.targetRegister(scroll);
         });
         return new BridgeScreen(activity, body);
+    }
+
+    /**
+     * Main shell with a fixed AppBar and a three-item bottom navigator.
+     * Pages are added with {@link #page()}; only one is visible at a time.
+     */
+    public static BridgeScreen attachTabs(AppCompatActivity activity, String title, int menuRes,
+                                          int checkedItemId, TabListener listener) {
+        configureEdgeToEdge(activity);
+
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundResource(UiStyle.material(activity)
+                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
+                : com.hchen.himiuix.R.color.miuix_theme_color);
+
+        MiuixAppBar appBar = new MiuixAppBar(activity);
+        appBar.setTitle(title);
+        appBar.getToolbar().setNavigationIcon(null);
+
+        NestedScrollView scroll = new NestedScrollView(activity);
+        scroll.setFillViewport(true);
+        scroll.setClipToPadding(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
+        MiuixFillView pageHost = new MiuixFillView(activity);
+        pageHost.setOrientation(LinearLayout.VERTICAL);
+        pageHost.setBackgroundResource(UiStyle.material(activity)
+                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
+                : com.hchen.himiuix.R.color.miuix_theme_color);
+        int topInset = pageHost.getPaddingTop();
+        pageHost.setPadding(0, topInset, 0, dp(activity, 24));
+        scroll.addView(pageHost, new NestedScrollView.LayoutParams(-1, -2));
+        appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
+
+        LinearLayout.LayoutParams appBarParams = new LinearLayout.LayoutParams(-1, 0, 1f);
+        root.addView(appBar, appBarParams);
+
+        MiuixBottomNavigatorView tabBar = new MiuixBottomNavigatorView(activity);
+        tabBar.inflateMenu(menuRes);
+        tabBar.setOnItemSelectedListener((item, fromUser) -> {
+            if (listener != null) listener.onTabSelected(item.getId());
+            return true;
+        });
+        if (checkedItemId != View.NO_ID) tabBar.check(checkedItemId);
+        styleTabBar(activity, tabBar);
+
+        View tabBarContainer = tabBarContainer(activity, tabBar, UiStyle.floating(activity));
+        root.addView(tabBarContainer, tabBarContainerParams(activity, UiStyle.floating(activity)));
+
+        activity.setContentView(root);
+        ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 24));
+            return insets;
+        });
+        appBar.post(() -> {
+            appBar.targetStart(scroll);
+            appBar.targetRegister(scroll);
+        });
+        return new BridgeScreen(activity, pageHost, appBar, scroll, pageHost, tabBar, tabBarContainer);
+    }
+
+    /** Adds a page below the main shell and returns helpers bound to that page. */
+    public BridgeScreen page() {
+        if (pageHost == null) throw new IllegalStateException("PAGES_REQUIRE_TABS");
+        LinearLayout page = new LinearLayout(activity);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setVisibility(View.GONE);
+        pageHost.addView(page, new LinearLayout.LayoutParams(-1, -2));
+        pages.add(page);
+        return new BridgeScreen(activity, page);
+    }
+
+    public List<LinearLayout> pages() {
+        return pages;
+    }
+
+    public void setPageChrome(String title, boolean back, Runnable onBack) {
+        if (appBar == null) return;
+        appBar.setTitle(title);
+        if (back) {
+            appBar.getToolbar().setNavigationIcon(com.hchen.himiuix.R.drawable.miuix_back);
+            appBar.getToolbar().setNavigationOnClickListener(view -> {
+                if (onBack != null) onBack.run();
+            });
+        } else {
+            appBar.getToolbar().setNavigationIcon(null);
+            appBar.getToolbar().setNavigationOnClickListener(null);
+        }
+    }
+
+    public void setTabBarVisible(boolean visible) {
+        if (tabBarContainer == null) return;
+        tabBarContainer.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    public void checkTab(int itemId) {
+        if (tabBar != null) tabBar.check(itemId);
+    }
+
+    public void scrollToTop() {
+        if (scroll != null) scroll.scrollTo(0, 0);
+    }
+
+    private static void styleTabBar(AppCompatActivity activity, MiuixBottomNavigatorView tabBar) {
+        if (UiStyle.material(activity)) {
+            tabBar.setBackgroundColor(ContextCompat.getColor(activity,
+                    io.github.miam1ku.mibandoplusbridge.R.color.surface));
+            tabBar.setElevation(dp(activity, 3));
+        }
+    }
+
+    private static View tabBarContainer(AppCompatActivity activity, MiuixBottomNavigatorView tabBar,
+                                        boolean floating) {
+        if (!floating) {
+            tabBar.setClipToOutline(false);
+            return tabBar;
+        }
+        FrameLayout frame = new FrameLayout(activity);
+        frame.setClipToOutline(true);
+        frame.setElevation(dp(activity, 10));
+        frame.setBackground(rounded(
+                ContextCompat.getColor(activity, io.github.miam1ku.mibandoplusbridge.R.color.surface),
+                dp(activity, 28),
+                ContextCompat.getColor(activity, io.github.miam1ku.mibandoplusbridge.R.color.outline_variant),
+                dp(activity, 1)));
+        frame.addView(tabBar, new FrameLayout.LayoutParams(-1, -2));
+        return frame;
+    }
+
+    private static LinearLayout.LayoutParams tabBarContainerParams(
+            AppCompatActivity activity, boolean floating) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        if (floating) {
+            params.leftMargin = dp(activity, 16);
+            params.rightMargin = dp(activity, 16);
+            params.bottomMargin = dp(activity, 10);
+        }
+        return params;
     }
 
     private static void configureEdgeToEdge(AppCompatActivity activity) {
@@ -201,13 +366,16 @@ public final class BridgeScreen {
     }
 
     public LinearLayout card(LinearLayout parent) {
-        return cardWith(parent, color(com.hchen.himiuix.R.color.miuix_basic_background_color));
+        return cardWith(parent, UiStyle.material(activity)
+                ? color(io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low)
+                : color(com.hchen.himiuix.R.color.miuix_basic_background_color));
     }
 
     /** Card with a Miuix section title. */
     public LinearLayout section(String title) {
-        MiuixCard inner = cardWith(body,
-                color(com.hchen.himiuix.R.color.miuix_basic_background_color));
+        MiuixCard inner = cardWith(body, UiStyle.material(activity)
+                ? color(io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low)
+                : color(com.hchen.himiuix.R.color.miuix_basic_background_color));
         inner.setDividerTitle(title);
         return inner;
     }
@@ -253,6 +421,9 @@ public final class BridgeScreen {
         MiuixCard card = new MiuixCard(activity);
         CardView nativeCard = card.findViewById(com.hchen.himiuix.R.id.miuix_card);
         nativeCard.setCardBackgroundColor(fill);
+        boolean material = UiStyle.material(activity);
+        nativeCard.setRadius(dp(activity, material ? 14 : 22));
+        nativeCard.setCardElevation(dp(activity, material ? 1 : 0));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.bottomMargin = dp(activity, 4);
         parent.addView(card, params);
@@ -413,6 +584,7 @@ public final class BridgeScreen {
         private void restyle() {
             boolean dark = (context.getResources().getConfiguration().uiMode
                     & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+            boolean material = UiStyle.material(context);
             int blue = ContextCompat.getColor(context,
                     com.hchen.himiuix.R.color.miuix_switch_on);
             int soft = ContextCompat.getColor(context,
@@ -423,11 +595,12 @@ public final class BridgeScreen {
             int errorSoft = dark ? Color.rgb(68, 35, 33)
                     : ContextCompat.getColor(context,
                     io.github.miam1ku.mibandoplusbridge.R.color.error_container);
+            int radius = dp(context, material ? 999 : 15);
             Drawable background = switch (style) {
-                case FILLED -> rounded(blue, dp(context, 15), Color.TRANSPARENT, 0);
-                case OUTLINED -> rounded(soft, dp(context, 15), blue, 1);
-                case TEXT -> rounded(Color.TRANSPARENT, dp(context, 15), Color.TRANSPARENT, 0);
-                case DANGER -> rounded(errorSoft, dp(context, 15), error, 1);
+                case FILLED -> rounded(blue, radius, Color.TRANSPARENT, 0);
+                case OUTLINED -> rounded(soft, radius, blue, 1);
+                case TEXT -> rounded(Color.TRANSPARENT, radius, Color.TRANSPARENT, 0);
+                case DANGER -> rounded(errorSoft, radius, error, 1);
             };
             int textColor = switch (style) {
                 case FILLED -> Color.WHITE;
@@ -493,12 +666,16 @@ public final class BridgeScreen {
         return ContextCompat.getColor(activity, resource);
     }
 
-    private static GradientDrawable rounded(int fill, float radius, int stroke, int width) {
+    public static GradientDrawable roundedRect(int fill, float radius, int stroke, int width) {
         GradientDrawable shape = new GradientDrawable();
         shape.setColor(fill);
         shape.setCornerRadius(radius);
         if (width > 0) shape.setStroke(width, stroke);
         return shape;
+    }
+
+    private static GradientDrawable rounded(int fill, float radius, int stroke, int width) {
+        return roundedRect(fill, radius, stroke, width);
     }
 
     private static int withAlpha(int color, int alpha) {

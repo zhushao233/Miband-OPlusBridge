@@ -48,7 +48,8 @@ public final class LabActivity extends AppCompatActivity {
                 BandLiveService.start(this);
                 setResultText("已请求同步，手环连上后就可以发通知和来电。");
             } catch (RuntimeException failure) {
-                setResultText("会话启动中断：" + failure.getClass().getSimpleName() + "。回首页点「立即同步」再试一次。");
+                setResultText("会话启动中断：" + failure.getClass().getSimpleName()
+                        + "。回「设备」页点「同步剩余项目」再试一次。");
             }
             refresh();
         });
@@ -120,7 +121,7 @@ public final class LabActivity extends AppCompatActivity {
     }
 
     private static String deviceText(LocalPrefs state, boolean registered, boolean connected, int battery) {
-        if (!registered) return "回首页导入绑定并添加到健康，这里会显示设备信息。";
+        if (!registered) return "回「设备」页完成首次设置并添加到健康，这里会显示设备信息。";
         StringBuilder text = new StringBuilder();
         text.append("名称：").append(blank(state.getString("name", ""), "—")).append('\n');
         text.append("型号：").append(blank(state.getString("modelId", ""), "—")).append('\n');

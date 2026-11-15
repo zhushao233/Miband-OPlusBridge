@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="128dp"
+    android:viewportWidth="72"
+    android:viewportHeight="128">
+    <path
+        android:fillColor="@color/band_art_body"
+        android:pathData="M19,3h34c9.4,0 17,7.6 17,17v88c0,9.4 -7.6,17 -17,17H19c-9.4,0 -17,-7.6 -17,-17V20C2,10.6 9.6,3 19,3z"
+        android:strokeColor="@color/band_art_outline"
+        android:strokeWidth="5" />
+    <path
+        android:fillColor="@color/band_art_screen"
+        android:pathData="M17,13h38c4.4,0 8,3.6 8,8v86c0,4.4 -3.6,8 -8,8H17c-4.4,0 -8,-3.6 -8,-8V21c0,-4.4 3.6,-8 8,-8z" />
+    <path
+        android:fillColor="#66FFFFFF"
+        android:pathData="M18,15h36c3.3,0 6,2.7 6,6v14H12V21c0,-3.3 2.7,-6 6,-6z" />
+</vector>

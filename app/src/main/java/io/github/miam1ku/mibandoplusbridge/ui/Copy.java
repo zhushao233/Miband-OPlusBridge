@@ -37,7 +37,8 @@ public final class Copy {
     public static final String GUIDE = "1. 检查 Root：在 KernelSU 中允许本应用，回来点「检查 Root」。\n"
             + "2. 导入绑定：从小米运动健康的本地数据库读取手环密钥。\n"
             + "3. 添加到健康：桥接接管手环，设备空间和 OPPO 健康里随即出现这只手环。\n\n"
-            + "日常使用：在控制中心添加「手环」磁贴，下拉或点按即可连接。\n\n"
+            + "日常使用：在「设备」页查看连接、电量和上次同步；点「同步剩余项目」重新连接并补齐记录。"
+            + "设备详情、天气同步和入睡后暂停音乐在「工具」页。\n\n"
             + "开始前准备\n" + SETUP_PREREQ;
 
     // ---- connection ----
@@ -45,10 +46,11 @@ public final class Copy {
     /** Short reason shown next to "等待连接". */
     public static String offlineReason(String liveStatus) {
         return switch (liveStatus == null ? "" : liveStatus) {
-            case "OBSERVED_PROFILE_REQUIRED" -> "到高级设置采集连接参数后即可连接";
-            case "NATIVE_OWNERSHIP_REQUIRED" -> "点「立即同步」重新接管";
+            case "OBSERVED_PROFILE_REQUIRED" -> "到「设置 → 调试与日志」采集连接参数后即可连接";
+            case "NATIVE_OWNERSHIP_REQUIRED" -> "点「同步剩余项目」重新接管";
             case "UNPROVISIONED", "BINDING_INCOMPLETE", "BINDING_ADDRESS", "BINDING_REGION",
-                    "TOKEN_ENCODING_UNSUPPORTED", "CREDENTIAL_REFRESH_REQUIRED" -> "重新导入绑定即可连接";
+                    "TOKEN_ENCODING_UNSUPPORTED", "CREDENTIAL_REFRESH_REQUIRED" ->
+                    "到「设置 → 绑定与设备信息」重新导入绑定即可连接";
             case "BLUETOOTH_DISABLED" -> "打开蓝牙即可连接";
             default -> "手环靠近手机后会自动连接";
         };
@@ -58,11 +60,13 @@ public final class Copy {
     public static String ownershipFailure(String code) {
         return switch (code == null ? "" : code) {
             case "USER_LOCKED" -> "解锁手机后再点一次。";
-            case "UNPROVISIONED", "BINDING_INCOMPLETE" -> "到高级设置重新导入绑定，然后再添加。";
+            case "UNPROVISIONED", "BINDING_INCOMPLETE" ->
+                    "到「设置 → 绑定与设备信息」重新导入绑定，然后再添加。";
             case "BINDING_ADDRESS" -> "重新选择这只手环并导入绑定，蓝牙地址会按大写 MAC 保存。";
             case "BINDING_REGION" -> "在小米运动健康里打开这只手环，等它连上后再导入一次。";
             case "TOKEN_ENCODING_UNSUPPORTED" -> "让手环在小米运动健康里连上一次，再导入绑定。";
-            case "OBSERVED_PROFILE_REQUIRED" -> "到高级设置点「采集连接参数」，在小米运动健康里重连一次手环。";
+            case "OBSERVED_PROFILE_REQUIRED" ->
+                    "到「设置 → 调试与日志」点「采集连接参数」，在小米运动健康里重连一次手环。";
             case "FIRMWARE_OR_MODEL_UNSUPPORTED" -> "让手环在小米运动健康里连上一次，读到型号和固件后再添加。";
             case "OOB_BRANCH_UNSUPPORTED" -> "这只设备使用带外配对认证。桥接适配 SPP 和 BLE 的 WearAuthV2 认证。";
             case "PROTOCOL_VERSION_UNSUPPORTED", "SESSION_CONFIGURATION_UNSUPPORTED" ->
@@ -135,7 +139,7 @@ public final class Copy {
             case "WEATHER_BAND_REJECTED" -> "手环这次保留了原有天气，健康连接照常运行，稍后再发送一次。";
             case "WEATHER_BUSY" -> "上一次天气任务还在进行，稍后再点。";
             case "WEATHER_DISCONNECTED", "LIVE_SESSION_UNAVAILABLE", "WEATHER_CLOSED", "NATIVE_OWNERSHIP_REQUIRED" ->
-                    "回首页点「立即同步」，连上后再发送。";
+                    "回「设备」页点「同步剩余项目」，连上后再发送。";
             case "WEATHER_DATA_INVALID" -> "点「获取当前位置天气」换一份天气再发送。";
             default -> "天气发送中断，检查连接和天气源后再点一次。";
         };
