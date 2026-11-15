@@ -478,6 +478,11 @@ public final class MainActivity extends AppCompatActivity {
 
         toolsPage.heading("使用习惯");
         LinearLayout habit = toolsPage.card();
+        if (BandLiveService.sleepStateUnsupportedForCurrentDevice(this)) {
+            toolsPage.bodyText(habit, "当前手环会在下次同步时更新睡眠状态。");
+            toolsPage.caption("工具只承载入口与习惯设置；连接、同步和绑定状态以「设备」页为准。");
+            return;
+        }
         sleepPause = toolsPage.switchRow(habit, "入睡后暂停音乐",
                 "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。");
         sleepPause.setChecked(SleepMusic.enabled(this));
@@ -563,13 +568,13 @@ public final class MainActivity extends AppCompatActivity {
 
     private void buildSetupPage() {
         LinearLayout card = setupPage.card();
-        setupTitle = setupPage.overline(card, "首次设置 · 第 1/3 步");
+        setupTitle = setupPage.overline(card, "首次设置 · 第 1 步，共 3 步");
         stepRoot = setupPage.stepRow(card, 1, "授权 Root", StepState.CURRENT);
         stepImport = setupPage.stepRow(card, 2, "导入绑定", StepState.LATER);
         stepAdd = setupPage.stepRow(card, 3, "添加到健康", StepState.LATER);
         primaryHint = setupPage.caption(card, "");
         setupPrimary = setupPage.filled(card, Copy.setupLabel(SetupProgress.Step.ROOT), this::runHomePrimary);
-        openKsu = setupPage.outlined(card, "打开 KernelSU", this::openKernelSu);
+        openKsu = setupPage.outlined(card, "打开 Root 管理器", this::openKernelSu);
         setupPage.textButton(card, "打开小米运动健康", () -> launchMiHealth(null));
 
         setupPage.heading("开始前准备");
@@ -579,7 +584,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void bindChecklist(SetupProgress progress) {
-        setupTitle.setText("首次设置 · 第 " + progress.visibleIndex() + "/3 步");
+        setupTitle.setText("首次设置 · 第 " + progress.visibleIndex() + " 步，共 3 步");
         int current = progress.visibleIndex();
         setupPage.setStep(stepRoot, 1, "授权 Root", stepState(1, current));
         setupPage.setStep(stepImport, 2, "导入绑定", stepState(2, current));
@@ -691,6 +696,8 @@ public final class MainActivity extends AppCompatActivity {
 
         debugPage.heading("协议与诊断");
         LinearLayout protocol = debugPage.card();
+        debugPage.navRow(protocol, "拉取设备日志",
+                () -> startActivity(new Intent(this, DeviceLogActivity.class)));
         debugPage.navRow(protocol, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
         if (BuildConfig.DEBUG) {
             debugPage.navRow(protocol, "独立连接诊断",
@@ -929,7 +936,7 @@ public final class MainActivity extends AppCompatActivity {
                 Uri uri = androidx.core.content.FileProvider.getUriForFile(this,
                         "io.github.miam1ku.mibandoplusbridge.debuglog", file);
                 Intent send = new Intent(Intent.ACTION_SEND);
-                send.setType("text/plain");
+                send.setType("application/zip");
                 send.putExtra(Intent.EXTRA_STREAM, uri);
                 send.putExtra(Intent.EXTRA_SUBJECT, "小米手环桥接调试日志");
                 send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -980,7 +987,7 @@ public final class MainActivity extends AppCompatActivity {
     private void requestRoot() {
         if (worker.isShutdown() || probingRoot || changingOwnership) return;
         probingRoot = true;
-        showStatus("正在检查 KernelSU 授权…");
+        showStatus("正在检查 Root 授权…");
         worker.execute(() -> {
             boolean granted = new OwnershipController(this).probeRoot();
             main.post(() -> {
@@ -999,7 +1006,7 @@ public final class MainActivity extends AppCompatActivity {
     private void openKernelSu() {
         Intent launch = getPackageManager().getLaunchIntentForPackage("me.weishu.kernelsu");
         if (launch == null) {
-            showStatus("安装 KernelSU 管理器后，为本应用打开超级用户。");
+            showStatus("安装 Root 管理器后，为本应用打开超级用户。");
             return;
         }
         startActivity(launch);
