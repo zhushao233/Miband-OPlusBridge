@@ -12,6 +12,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -24,6 +25,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.activity.BackEventCompat;
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
@@ -45,6 +47,7 @@ import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen;
+import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.PageTransition;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.StepState;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.Tone;
 import io.github.miam1ku.mibandoplusbridge.ui.Copy;
@@ -84,6 +87,7 @@ public final class MainActivity extends AppCompatActivity {
     private int currentTabId = R.id.tab_device;
     private boolean secondaryPage;
     private String styleSignature;
+    private OnBackPressedCallback backCallback;
 
     private final List<View> boundViews = new ArrayList<>();
     private final List<View> unboundViews = new ArrayList<>();
@@ -181,17 +185,32 @@ public final class MainActivity extends AppCompatActivity {
             int restored = state.getInt("currentTab", R.id.tab_device);
             if (restored == R.id.tab_tools || restored == R.id.tab_settings) currentTabId = restored;
         }
-        showPrimaryTab(currentTabId, false);
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+        backCallback = new OnBackPressedCallback(false) {
+            @Override public void handleOnBackStarted(BackEventCompat event) {
+                if (!secondaryPage) return;
+                BridgeScreen target = primaryPage(currentTabId);
+                if (target != null) screen.beginPredictiveBack(target.body);
+            }
+
+            @Override public void handleOnBackProgressed(BackEventCompat event) {
+                if (secondaryPage) screen.updatePredictiveBack(event.getProgress());
+            }
+
+            @Override public void handleOnBackCancelled() {
+                if (secondaryPage) screen.cancelPredictiveBack();
+            }
+
             @Override public void handleOnBackPressed() {
                 if (secondaryPage) {
-                    showPrimaryTab(currentTabId, true);
+                    showPrimaryTab(currentTabId, true, PageTransition.BACK);
                     return;
                 }
                 setEnabled(false);
                 getOnBackPressedDispatcher().onBackPressed();
             }
-        });
+        };
+        getOnBackPressedDispatcher().addCallback(this, backCallback);
+        showPrimaryTab(currentTabId, false, PageTransition.NONE);
 
         getContentResolver().registerContentObserver(CredentialProvider.URI, false, observer);
         getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, deviceObserver);
@@ -204,40 +223,45 @@ public final class MainActivity extends AppCompatActivity {
 
     private void selectTab(int itemId) {
         if (itemId == R.id.tab_device || itemId == R.id.tab_tools || itemId == R.id.tab_settings) {
-            showPrimaryTab(itemId, true);
+            showPrimaryTab(itemId, true, PageTransition.TAB);
         }
     }
 
     private void showPrimaryTab(int itemId, boolean scrollTop) {
+        showPrimaryTab(itemId, scrollTop, PageTransition.TAB);
+    }
+
+    private void showPrimaryTab(int itemId, boolean scrollTop, PageTransition transition) {
         currentTabId = itemId;
         secondaryPage = false;
-        BridgeScreen target = itemId == R.id.tab_tools ? toolsPage
-                : itemId == R.id.tab_settings ? settingsPage : devicePage;
-        showOnly(target);
+        BridgeScreen target = primaryPage(itemId);
+        if (target == null) return;
         screen.setPageChrome(itemId == R.id.tab_tools ? "工具"
                 : itemId == R.id.tab_settings ? "设置" : "设备", false, null);
         screen.setTabBarVisible(true);
         screen.checkTab(itemId);
         if (scrollTop) screen.scrollToTop();
+        screen.showPage(target.body, transition, transition != PageTransition.NONE);
         if (itemId == R.id.tab_tools) refreshTools();
         if (itemId == R.id.tab_settings) refreshSettingsRows();
+        if (backCallback != null) backCallback.setEnabled(false);
+    }
+
+    private BridgeScreen primaryPage(int itemId) {
+        return itemId == R.id.tab_tools ? toolsPage
+                : itemId == R.id.tab_settings ? settingsPage : devicePage;
     }
 
     private void showSecondaryPage(BridgeScreen page, String title, Runnable onBack) {
         secondaryPage = true;
-        showOnly(page);
+        screen.showPage(page.body, PageTransition.FORWARD, true);
         screen.setPageChrome(title, true, () -> {
-            showPrimaryTab(currentTabId, true);
+            showPrimaryTab(currentTabId, true, PageTransition.BACK);
             if (onBack != null) onBack.run();
         });
         screen.setTabBarVisible(false);
         screen.scrollToTop();
-    }
-
-    private void showOnly(BridgeScreen page) {
-        for (LinearLayout item : screen.pages()) {
-            item.setVisibility(item == page.body ? View.VISIBLE : View.GONE);
-        }
+        if (backCallback != null) backCallback.setEnabled(true);
     }
 
     @Override protected void onSaveInstanceState(Bundle outState) {
@@ -281,7 +305,7 @@ public final class MainActivity extends AppCompatActivity {
         ImageView art = new ImageView(this);
         art.setImageResource(R.drawable.ic_band_hero);
         art.setContentDescription(null);
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(dp(78), dp(138));
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(dp(82), dp(100));
         artParams.leftMargin = dp(8);
         top.addView(art, artParams);
 
@@ -479,11 +503,11 @@ public final class MainActivity extends AppCompatActivity {
         deviceDetailRow = toolsPage.navRow(links, "设备详情",
                 () -> startActivity(new Intent(this, BandDetailsActivity.class)));
         deviceDetailRow.setSummary("已保存历史、日汇总核对");
-        deviceDetailRow.setIcon(R.drawable.ic_tab_device);
+        deviceDetailRow.setIcon(rowIcon(R.drawable.ic_tab_device));
         MiuixBasicView weather = toolsPage.navRow(links, "天气同步",
                 () -> startActivity(new Intent(this, WeatherActivity.class)));
         weather.setSummary("位置天气、城市关联");
-        weather.setIcon(R.drawable.ic_weather);
+        weather.setIcon(rowIcon(R.drawable.ic_weather));
 
         toolsPage.heading("使用习惯");
         LinearLayout habit = toolsPage.card();
@@ -519,7 +543,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout appearance = settingsPage.card();
         appearanceRow = settingsPage.navRow(appearance, "主题与布局",
                 () -> showSecondaryPage(appearancePage, "主题与布局", this::refreshSettingsRows));
-        appearanceRow.setIcon(R.drawable.ic_settings);
+        appearanceRow.setIcon(rowIcon(R.drawable.ic_settings));
 
         settingsPage.heading("应用权限");
         LinearLayout permissions = settingsPage.card();
@@ -528,7 +552,7 @@ public final class MainActivity extends AppCompatActivity {
             showSecondaryPage(permissionsPage, "权限与后台", this::refreshPermissionRows);
         });
         permissionRow.setSummary("附近设备、自启动与关联启动");
-        permissionRow.setIcon(R.drawable.ic_nearby);
+        permissionRow.setIcon(rowIcon(R.drawable.ic_nearby));
 
         settingsPage.heading("高级");
         LinearLayout advanced = settingsPage.card();
@@ -538,13 +562,13 @@ public final class MainActivity extends AppCompatActivity {
             showSecondaryPage(bindingPage, "绑定与设备信息", this::refreshDevice);
         });
         binding.setSummary("重新导入、设备选择与管理");
-        binding.setIcon(R.drawable.ic_tab_device);
+        binding.setIcon(rowIcon(R.drawable.ic_tab_device));
         MiuixBasicView debug = settingsPage.navRow(advanced, "调试与日志", () -> {
             refreshDebugStatus();
             showSecondaryPage(debugPage, "调试与日志", this::refreshDevice);
         });
         debug.setSummary("协议测试、诊断与发送日志");
-        debug.setIcon(R.drawable.ic_debug);
+        debug.setIcon(rowIcon(R.drawable.ic_debug));
         MiuixBasicView restore = settingsPage.navRow(advanced, "恢复小米运动健康", this::confirmRestore);
         restore.setSummary("交接连接，保留本机历史");
         restore.setTip("需确认");
@@ -736,10 +760,10 @@ public final class MainActivity extends AppCompatActivity {
         nearbyRow = permissionsPage.navRow(card, "附近设备", () -> requestPermissions(
                 new String[]{Manifest.permission.BLUETOOTH_CONNECT}, BLUETOOTH_PERMISSION));
         nearbyRow.setSummary("连接已配对的蓝牙手环");
-        nearbyRow.setIcon(R.drawable.ic_nearby);
+        nearbyRow.setIcon(rowIcon(R.drawable.ic_nearby));
         autoStartRow = permissionsPage.navRow(card, "自启动与关联启动", this::openAutoStartSettings);
         autoStartRow.setSummary("ColorOS 后台运行");
-        autoStartRow.setIcon(R.drawable.ic_startup);
+        autoStartRow.setIcon(rowIcon(R.drawable.ic_startup));
         permissionsPage.caption("修改系统权限后返回本页即可重新检查。权限变化时，设备页会继续显示当前连接状态。");
         refreshPermissionRows();
     }
@@ -803,7 +827,21 @@ public final class MainActivity extends AppCompatActivity {
                         Toast.makeText(this, "底栏设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
                     }
                 });
-        appearancePage.caption("主题切换会调整卡片圆角与组件密度；底栏切换会立即应用到三个主页。");
+        if (UiStyle.floating(this)) {
+            BridgeScreen.ToggleRow glass = appearancePage.switchRow(dockCard,
+                    "液态玻璃底栏", "半透明胶囊与细描边；关闭后使用实色悬浮底栏。");
+            glass.setChecked(UiStyle.glass(this));
+            glass.setOnStateChangeListener(checked -> {
+                if (UiStyle.setGlass(this, checked)) {
+                    styleSignature = UiStyle.signature(this);
+                    recreate();
+                    return true;
+                }
+                Toast.makeText(this, "底栏样式保存中断，再试一次", Toast.LENGTH_SHORT).show();
+                return false;
+            });
+        }
+        appearancePage.caption("主题切换会调整卡片圆角与组件密度；底栏样式会立即应用到三个主页。");
     }
 
     private interface Choice { void onSelected(int index); }
@@ -1132,7 +1170,7 @@ public final class MainActivity extends AppCompatActivity {
                 refreshDevice();
                 refreshBindingStatus();
                 if (change == Change.ADD && repository.isRegistered() && secondaryPage) {
-                    showPrimaryTab(R.id.tab_device, true);
+                    showPrimaryTab(R.id.tab_device, true, PageTransition.BACK);
                 }
                 if (profileAfterRestore && followProfile) {
                     profileAfterRestore = false;
@@ -1538,6 +1576,14 @@ public final class MainActivity extends AppCompatActivity {
         if (medium) view.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         view.setIncludeFontPadding(false);
         return view;
+    }
+
+    private Drawable rowIcon(int resource) {
+        Drawable icon = ContextCompat.getDrawable(this, resource);
+        if (icon == null) return null;
+        icon = icon.mutate();
+        icon.setTint(color(R.color.on_surface_variant));
+        return icon;
     }
 
     private LinearLayout.LayoutParams textParams(int left, int top, int right, int bottom) {

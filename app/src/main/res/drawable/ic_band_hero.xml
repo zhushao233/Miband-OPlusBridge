@@ -1,21 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="72dp"
-    android:height="128dp"
-    android:viewportWidth="72"
-    android:viewportHeight="128">
-    <path
-        android:fillColor="@color/band_art_body"
-        android:pathData="M27,2h18c3.3,0 6,2.7 6,6v20H21V8c0,-3.3 2.7,-6 6,-6zM27,100h18c3.3,0 6,2.7 6,6v20H21v-20c0,-3.3 2.7,-6 6,-6z" />
-    <path
-        android:fillColor="@color/band_art_body"
-        android:pathData="M20,25h32c8.8,0 16,7.2 16,16v46c0,8.8 -7.2,16 -16,16H20c-8.8,0 -16,-7.2 -16,-16V41c0,-8.8 7.2,-16 16,-16z"
-        android:strokeColor="@color/band_art_outline"
-        android:strokeWidth="4" />
-    <path
-        android:fillColor="@color/band_art_screen"
-        android:pathData="M20,35h32c4.4,0 8,3.6 8,8v42c0,4.4 -3.6,8 -8,8H20c-4.4,0 -8,-3.6 -8,-8V43c0,-4.4 3.6,-8 8,-8z" />
-    <path
-        android:fillColor="#66FFFFFF"
-        android:pathData="M18,15h36c3.3,0 6,2.7 6,6v14H12V21c0,-3.3 2.7,-6 6,-6z" />
+    android:width="82dp"
+    android:height="100dp"
+    android:viewportWidth="54.20216"
+    android:viewportHeight="65.87677">
+    <group
+        android:translateX="-212.89892"
+        android:translateY="-147.06161">
+        <path
+            android:fillColor="@android:color/transparent"
+            android:pathData="M214.39892,185.55613c0,-0.73295 0.03081,-12.57092 0.09118,-13.28825c0.07548,-0.8967 0.19717,-2.06145 0.36269,-2.92946c2.25638,-11.83268 12.65729,-20.7768 25.14721,-20.7768c12.1049,0 22.2476,8.40118 24.9155,19.69092c0.23962,1.014 0.41894,2.3325 0.53397,3.38912c0.10019,0.92031 0.15161,12.96749 0.15161,13.91446c0,1.04335 -0.06241,2.07214 -0.18372,3.08281c-0.13508,1.12547 -0.34317,2.50968 -0.61942,3.58537c-2.83738,11.04865 -12.86409,19.21409 -24.79794,19.21409c-12.57233,0 -23.02798,-9.06252 -25.1908,-21.01136c-0.15311,-0.84586 -0.26466,-1.98737 -0.33246,-2.85997c-0.05156,-0.66353 -0.07782,-1.33417 -0.07782,-2.01094z"
+            android:strokeColor="@color/band_art_outline"
+            android:strokeWidth="3" />
+        <path
+            android:fillColor="@color/band_art_body"
+            android:pathData="M218.47985,185.44296c0,-0.61611 0.0259,-12.11209 0.07665,-12.71507c0.06345,-0.75376 0.16574,-1.73283 0.30487,-2.46248c1.8967,-9.94651 10.63967,-17.46489 21.13864,-17.46489c10.17532,0 18.70123,7.06199 20.94386,16.5521c0.20142,0.85237 0.35217,1.96069 0.44886,2.84888c0.08422,0.77361 0.12743,12.44544 0.12743,13.24146c0,0.87704 -0.05246,1.74183 -0.15443,2.5914c-0.11354,0.94607 -0.28847,2.10963 -0.52068,3.01385c-2.38509,9.28745 -10.8135,16.15128 -20.84504,16.15128c-10.56824,0 -19.35722,-7.61791 -21.17528,-17.66206c-0.1287,-0.71103 -0.22248,-1.67057 -0.27947,-2.40408c-0.04334,-0.55776 -0.06542,-1.1215 -0.06542,-1.69039z" />
+        <path
+            android:fillColor="@android:color/transparent"
+            android:pathData="M231.95083,180.88585c0,0 4.08828,4.08828 4.99032,4.99032c0.33557,0.33557 1.07369,0.30749 1.50289,-0.12171c1.63997,-1.63997 11.85931,-11.85931 11.85931,-11.85931"
+            android:strokeColor="@color/accent"
+            android:strokeLineCap="round"
+            android:strokeWidth="2.5" />
+    </group>
 </vector>

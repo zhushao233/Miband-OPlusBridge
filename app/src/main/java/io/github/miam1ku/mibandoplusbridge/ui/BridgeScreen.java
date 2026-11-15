@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.ui;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -13,6 +17,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -27,7 +32,6 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.core.widget.NestedScrollView;
 import com.hchen.himiuix.MiuixAppBar;
 import com.hchen.himiuix.MiuixBasicView;
-import com.hchen.himiuix.MiuixBottomNavigatorView;
 import com.hchen.himiuix.MiuixViewGroup;
 import com.hchen.himiuix.fill.MiuixFillView;
 import com.hchen.himiuix.helper.WindowInsetsHelper;
@@ -44,6 +48,9 @@ public final class BridgeScreen {
     /** Colour role of a chip, notice card, or status line. */
     public enum Tone { POSITIVE, ACTIVE, NEUTRAL, ATTENTION }
 
+    /** Motion used when swapping the visible page. */
+    public enum PageTransition { NONE, TAB, FORWARD, BACK }
+
     /** Position of a setup step relative to the current one. */
     public enum StepState { DONE, CURRENT, LATER }
 
@@ -56,23 +63,31 @@ public final class BridgeScreen {
     private final AppCompatActivity activity;
     private final MiuixAppBar appBar;
     private final NestedScrollView scroll;
-    private final MiuixBottomNavigatorView tabBar;
+    private final PiliTabBar tabBar;
     private final View tabBarContainer;
     private final MiuixFillView pageHost;
+    private final FrameLayout pageFrame;
     private final List<LinearLayout> pages = new ArrayList<>();
+    private LinearLayout visiblePage;
+    private AnimatorSet pageAnimator;
+    private int pageAnimationToken;
+    private boolean predictiveBack;
+    private LinearLayout predictiveSource;
+    private LinearLayout predictiveTarget;
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body) {
-        this(activity, body, null, null, null, null, null);
+        this(activity, body, null, null, null, null, null, null);
     }
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body, MiuixAppBar appBar,
-                         NestedScrollView scroll, MiuixFillView pageHost,
-                         MiuixBottomNavigatorView tabBar, View tabBarContainer) {
+                         NestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
+                         PiliTabBar tabBar, View tabBarContainer) {
         this.activity = activity;
         this.body = body;
         this.appBar = appBar;
         this.scroll = scroll;
         this.pageHost = pageHost;
+        this.pageFrame = pageFrame;
         this.tabBar = tabBar;
         this.tabBarContainer = tabBarContainer;
     }
@@ -146,44 +161,63 @@ public final class BridgeScreen {
                 : com.hchen.himiuix.R.color.miuix_theme_color);
         int topInset = pageHost.getPaddingTop();
         pageHost.setPadding(0, topInset, 0, dp(activity, 96));
+        FrameLayout pageFrame = new FrameLayout(activity);
+        pageFrame.setClipChildren(true);
+        pageHost.addView(pageFrame, new LinearLayout.LayoutParams(-1, -2));
         scroll.addView(pageHost, new NestedScrollView.LayoutParams(-1, -2));
         appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
 
         LinearLayout.LayoutParams appBarParams = new LinearLayout.LayoutParams(-1, 0, 1f);
         root.addView(appBar, appBarParams);
 
-        MiuixBottomNavigatorView tabBar = new MiuixBottomNavigatorView(activity);
-        tabBar.inflateMenu(menuRes);
-        tabBar.setOnItemSelectedListener((item, fromUser) -> {
-            if (listener != null) listener.onTabSelected(item.getId());
-            return true;
+        boolean floating = UiStyle.floating(activity);
+        PiliTabBar tabBar = new PiliTabBar(activity, menuRes, checkedItemId, floating);
+        tabBar.setOnTabSelectedListener(itemId -> {
+            if (listener != null) listener.onTabSelected(itemId);
         });
-        if (checkedItemId != View.NO_ID) tabBar.check(checkedItemId);
-        styleTabBar(activity, tabBar);
 
-        View tabBarContainer = tabBarContainer(activity, tabBar, UiStyle.floating(activity));
-        root.addView(tabBarContainer, tabBarContainerParams(activity, UiStyle.floating(activity)));
+        View tabBarContainer = tabBarContainer(activity, tabBar, floating);
+        root.addView(tabBarContainer, tabBarContainerParams(activity, floating));
 
         activity.setContentView(root);
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 96));
+            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 96) + bars.bottom);
+            return insets;
+        });
+        ViewCompat.setOnApplyWindowInsetsListener(tabBarContainer, (view, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            LinearLayout.LayoutParams params =
+                    (LinearLayout.LayoutParams) view.getLayoutParams();
+            if (floating) {
+                params.leftMargin = dp(activity, 16) + bars.left;
+                params.rightMargin = dp(activity, 16) + bars.right;
+                params.bottomMargin = dp(activity, 10) + bars.bottom;
+                view.setPadding(0, 0, 0, 0);
+            } else {
+                params.leftMargin = 0;
+                params.rightMargin = 0;
+                params.bottomMargin = 0;
+                view.setPadding(bars.left, 0, bars.right, bars.bottom);
+            }
+            view.setLayoutParams(params);
             return insets;
         });
         appBar.post(() -> {
             appBar.targetStart(scroll);
             appBar.targetRegister(scroll);
         });
-        return new BridgeScreen(activity, pageHost, appBar, scroll, pageHost, tabBar, tabBarContainer);
+        return new BridgeScreen(activity, pageHost, appBar, scroll, pageHost, pageFrame,
+                tabBar, tabBarContainer);
     }
 
     /** Adds a page below the main shell and returns helpers bound to that page. */
     public BridgeScreen page() {
-        if (pageHost == null) throw new IllegalStateException("PAGES_REQUIRE_TABS");
+        if (pageFrame == null) throw new IllegalStateException("PAGES_REQUIRE_TABS");
         LinearLayout page = new LinearLayout(activity);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setVisibility(View.GONE);
-        pageHost.addView(page, new LinearLayout.LayoutParams(-1, -2));
+        pageFrame.addView(page, new FrameLayout.LayoutParams(-1, -2));
         pages.add(page);
         return new BridgeScreen(activity, page);
     }
@@ -208,7 +242,14 @@ public final class BridgeScreen {
 
     public void setTabBarVisible(boolean visible) {
         if (tabBarContainer == null) return;
-        tabBarContainer.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (visible) {
+            tabBarContainer.setVisibility(View.VISIBLE);
+        } else {
+            tabBarContainer.animate().cancel();
+            tabBarContainer.setVisibility(View.GONE);
+            tabBarContainer.setAlpha(1f);
+            tabBarContainer.setTranslationY(0f);
+        }
     }
 
     public void checkTab(int itemId) {
@@ -219,41 +260,355 @@ public final class BridgeScreen {
         if (scroll != null) scroll.scrollTo(0, 0);
     }
 
-    private static void styleTabBar(AppCompatActivity activity, MiuixBottomNavigatorView tabBar) {
-        if (UiStyle.material(activity)) {
-            tabBar.setBackgroundColor(ContextCompat.getColor(activity,
-                    io.github.miam1ku.mibandoplusbridge.R.color.surface));
-            tabBar.setElevation(dp(activity, 3));
+    /** Swaps the visible page with one shared motion language for tabs and drill-down pages. */
+    public void showPage(LinearLayout target, PageTransition transition, boolean animate) {
+        if (target == null) return;
+        if (predictiveBack && target == predictiveTarget && transition == PageTransition.BACK) {
+            finishPredictiveBack();
+            return;
+        }
+        discardPredictiveBack();
+        cancelPageAnimation();
+
+        LinearLayout source = visiblePage;
+        for (LinearLayout page : pages) {
+            if (page != source && page != target) hidePage(page);
+        }
+        if (target == source && target.getVisibility() == View.VISIBLE) return;
+
+        target.setVisibility(View.VISIBLE);
+        resetPage(target);
+        if (source != null) resetPage(source);
+        if (!animate || source == null || source == target || !target.isLaidOut()) {
+            completePage(target);
+            return;
+        }
+        switch (transition) {
+            case TAB -> fadeThrough(source, target);
+            case FORWARD -> slideForward(source, target);
+            case BACK -> slideBack(source, target);
+            default -> completePage(target);
         }
     }
 
-    private static View tabBarContainer(AppCompatActivity activity, MiuixBottomNavigatorView tabBar,
-                                        boolean floating) {
-        if (!floating) {
-            tabBar.setClipToOutline(false);
-            return tabBar;
+    /** Starts an interactive back preview over the primary page. */
+    public boolean beginPredictiveBack(LinearLayout target) {
+        if (target == null || visiblePage == null || target == visiblePage) return false;
+        discardPredictiveBack();
+        cancelPageAnimation();
+
+        predictiveSource = visiblePage;
+        predictiveTarget = target;
+        predictiveBack = true;
+        for (LinearLayout page : pages) {
+            if (page != predictiveSource && page != predictiveTarget) hidePage(page);
         }
+
+        resetPage(predictiveTarget);
+        predictiveTarget.setVisibility(View.VISIBLE);
+        predictiveTarget.setAlpha(0.72f);
+        predictiveTarget.setTranslationX(-dp(activity, 14));
+        predictiveTarget.setTranslationZ(0f);
+        resetPage(predictiveSource);
+        predictiveSource.setTranslationZ(dp(activity, 1));
+
+        if (tabBarContainer != null) {
+            tabBarContainer.animate().cancel();
+            tabBarContainer.setVisibility(View.VISIBLE);
+            tabBarContainer.setAlpha(0f);
+            tabBarContainer.setTranslationY(dp(activity, 8));
+        }
+        return true;
+    }
+
+    /** Tracks the system back gesture between 0 and 1. */
+    public void updatePredictiveBack(float progress) {
+        if (!predictiveBack || predictiveSource == null || predictiveTarget == null) return;
+        float value = Math.max(0f, Math.min(1f, progress));
+        float width = Math.max(1, predictiveSource.getWidth());
+        predictiveSource.setTranslationX(width * 0.92f * value);
+        predictiveSource.setAlpha(1f - 0.58f * value);
+        predictiveTarget.setTranslationX(-dp(activity, 14) * (1f - value));
+        predictiveTarget.setAlpha(0.72f + 0.28f * value);
+        if (tabBarContainer != null) {
+            tabBarContainer.setAlpha(value);
+            tabBarContainer.setTranslationY(dp(activity, 8) * (1f - value));
+        }
+    }
+
+    /** Restores the secondary page when the user cancels the gesture. */
+    public void cancelPredictiveBack() {
+        if (!predictiveBack || predictiveSource == null || predictiveTarget == null) return;
+        LinearLayout source = predictiveSource;
+        LinearLayout target = predictiveTarget;
+        predictiveBack = false;
+        cancelPageAnimation();
+
+        AnimatorSet restore = new AnimatorSet();
+        restore.playTogether(
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X,
+                        source.getTranslationX(), 0f),
+                ObjectAnimator.ofFloat(source, View.ALPHA, source.getAlpha(), 1f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X,
+                        target.getTranslationX(), -dp(activity, 14)),
+                ObjectAnimator.ofFloat(target, View.ALPHA, target.getAlpha(), 0f));
+        if (tabBarContainer != null) {
+            restore.playTogether(
+                    ObjectAnimator.ofFloat(tabBarContainer, View.ALPHA,
+                            tabBarContainer.getAlpha(), 0f),
+                    ObjectAnimator.ofFloat(tabBarContainer, View.TRANSLATION_Y,
+                            tabBarContainer.getTranslationY(), dp(activity, 8)));
+        }
+        restore.setDuration(180);
+        restore.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        runPageAnimation(restore, () -> {
+            hidePage(target);
+            resetPage(source);
+            source.setVisibility(View.VISIBLE);
+            visiblePage = source;
+            clearPredictivePages();
+            if (tabBarContainer != null) {
+                tabBarContainer.setVisibility(View.GONE);
+                tabBarContainer.setAlpha(1f);
+                tabBarContainer.setTranslationY(0f);
+            }
+        });
+    }
+
+    private void finishPredictiveBack() {
+        if (!predictiveBack || predictiveSource == null || predictiveTarget == null) return;
+        LinearLayout source = predictiveSource;
+        LinearLayout target = predictiveTarget;
+        predictiveBack = false;
+        cancelPageAnimation();
+
+        float width = Math.max(1, source.getWidth());
+        AnimatorSet commit = new AnimatorSet();
+        commit.playTogether(
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X,
+                        source.getTranslationX(), width),
+                ObjectAnimator.ofFloat(source, View.ALPHA, source.getAlpha(), 0f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X,
+                        target.getTranslationX(), 0f),
+                ObjectAnimator.ofFloat(target, View.ALPHA, target.getAlpha(), 1f));
+        if (tabBarContainer != null) {
+            commit.playTogether(
+                    ObjectAnimator.ofFloat(tabBarContainer, View.ALPHA,
+                            tabBarContainer.getAlpha(), 1f),
+                    ObjectAnimator.ofFloat(tabBarContainer, View.TRANSLATION_Y,
+                            tabBarContainer.getTranslationY(), 0f));
+        }
+        commit.setDuration(190);
+        commit.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        runPageAnimation(commit, () -> {
+            completePage(target);
+            clearPredictivePages();
+            if (tabBarContainer != null) {
+                tabBarContainer.setVisibility(View.VISIBLE);
+                tabBarContainer.setAlpha(1f);
+                tabBarContainer.setTranslationY(0f);
+            }
+        });
+    }
+
+    private void fadeThrough(LinearLayout source, LinearLayout target) {
+        target.setAlpha(0f);
+        target.setScaleX(0.985f);
+        target.setScaleY(0.985f);
+        target.setTranslationY(dp(activity, 5));
+
+        AnimatorSet out = new AnimatorSet();
+        out.playTogether(
+                ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0f),
+                ObjectAnimator.ofFloat(source, View.SCALE_X, 1f, 0.985f),
+                ObjectAnimator.ofFloat(source, View.SCALE_Y, 1f, 0.985f));
+        out.setDuration(110);
+        out.setInterpolator(new PathInterpolator(0.4f, 0f, 1f, 1f));
+
+        AnimatorSet in = new AnimatorSet();
+        in.playTogether(
+                ObjectAnimator.ofFloat(target, View.ALPHA, 0f, 1f),
+                ObjectAnimator.ofFloat(target, View.SCALE_X, 0.985f, 1f),
+                ObjectAnimator.ofFloat(target, View.SCALE_Y, 0.985f, 1f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_Y, dp(activity, 5), 0f));
+        in.setDuration(210);
+        in.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        in.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationStart(Animator animation) {
+                hidePage(source);
+            }
+        });
+
+        AnimatorSet whole = new AnimatorSet();
+        whole.playSequentially(out, in);
+        runPageAnimation(whole, () -> completePage(target));
+    }
+
+    private void slideForward(LinearLayout source, LinearLayout target) {
+        target.setAlpha(0f);
+        target.setTranslationX(dp(activity, 30));
+        target.setTranslationZ(dp(activity, 1));
+        source.setTranslationZ(0f);
+
+        AnimatorSet animation = new AnimatorSet();
+        animation.playTogether(
+                ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0.25f),
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, -dp(activity, 22)),
+                ObjectAnimator.ofFloat(target, View.ALPHA, 0f, 1f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, dp(activity, 30), 0f));
+        animation.setDuration(270);
+        animation.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        runPageAnimation(animation, () -> completePage(target));
+    }
+
+    private void slideBack(LinearLayout source, LinearLayout target) {
+        target.setAlpha(0.72f);
+        target.setTranslationX(-dp(activity, 14));
+        target.setTranslationZ(0f);
+        source.setTranslationZ(dp(activity, 1));
+
+        AnimatorSet animation = new AnimatorSet();
+        animation.playTogether(
+                ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0f),
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, dp(activity, 48)),
+                ObjectAnimator.ofFloat(target, View.ALPHA, 0.72f, 1f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, -dp(activity, 14), 0f));
+        animation.setDuration(250);
+        animation.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        runPageAnimation(animation, () -> completePage(target));
+    }
+
+    private void runPageAnimation(AnimatorSet animator, Runnable completion) {
+        int token = ++pageAnimationToken;
+        pageAnimator = animator;
+        animator.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator animation) {
+                if (token != pageAnimationToken) return;
+                pageAnimator = null;
+                completion.run();
+            }
+        });
+        animator.start();
+    }
+
+    private void cancelPageAnimation() {
+        pageAnimationToken++;
+        if (pageAnimator != null) {
+            pageAnimator.cancel();
+            pageAnimator = null;
+        }
+    }
+
+    private void completePage(LinearLayout target) {
+        for (LinearLayout page : pages) {
+            if (page != target) hidePage(page);
+        }
+        resetPage(target);
+        target.setVisibility(View.VISIBLE);
+        visiblePage = target;
+    }
+
+    private void hidePage(LinearLayout page) {
+        page.setVisibility(View.GONE);
+        resetPage(page);
+    }
+
+    private void resetPage(LinearLayout page) {
+        page.setAlpha(1f);
+        page.setTranslationX(0f);
+        page.setTranslationY(0f);
+        page.setTranslationZ(0f);
+        page.setScaleX(1f);
+        page.setScaleY(1f);
+    }
+
+    private void discardPredictiveBack() {
+        if (!predictiveBack) return;
+        predictiveBack = false;
+        if (predictiveTarget != null) hidePage(predictiveTarget);
+        if (predictiveSource != null) {
+            resetPage(predictiveSource);
+            predictiveSource.setVisibility(View.VISIBLE);
+            visiblePage = predictiveSource;
+        }
+        clearPredictivePages();
+    }
+
+    private void clearPredictivePages() {
+        predictiveSource = null;
+        predictiveTarget = null;
+    }
+
+    private static View tabBarContainer(AppCompatActivity activity, PiliTabBar tabBar,
+                                        boolean floating) {
         FrameLayout frame = new FrameLayout(activity);
-        frame.setClipToOutline(true);
-        frame.setElevation(dp(activity, 10));
-        frame.setBackground(rounded(
-                ContextCompat.getColor(activity, io.github.miam1ku.mibandoplusbridge.R.color.surface),
-                dp(activity, 28),
-                ContextCompat.getColor(activity, io.github.miam1ku.mibandoplusbridge.R.color.outline_variant),
-                dp(activity, 1)));
-        frame.addView(tabBar, new FrameLayout.LayoutParams(-1, -2));
+        if (floating) {
+            frame.setClipToOutline(true);
+            frame.setElevation(dp(activity, UiStyle.glass(activity) ? 12 : 7));
+            frame.setBackground(UiStyle.glass(activity)
+                    ? floatingTabBackground(activity)
+                    : solidFloatingTabBackground(activity));
+            frame.addView(tabBar, new FrameLayout.LayoutParams(-2, dp(activity, 64)));
+        } else {
+            int background = UiStyle.material(activity)
+                    ? io.github.miam1ku.mibandoplusbridge.R.color.surface
+                    : com.hchen.himiuix.R.color.miuix_theme_color;
+            GradientDrawable bar = new GradientDrawable();
+            bar.setColor(ContextCompat.getColor(activity, background));
+            bar.setStroke(dp(activity, 1), ContextCompat.getColor(activity,
+                    io.github.miam1ku.mibandoplusbridge.R.color.outline_variant));
+            frame.setBackground(bar);
+            frame.setElevation(dp(activity, 3));
+            frame.addView(tabBar, new FrameLayout.LayoutParams(-1, dp(activity, 64)));
+        }
         return frame;
     }
 
     private static LinearLayout.LayoutParams tabBarContainerParams(
             AppCompatActivity activity, boolean floating) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(floating ? -2 : -1, -2);
         if (floating) {
+            params.gravity = Gravity.CENTER_HORIZONTAL;
             params.leftMargin = dp(activity, 16);
             params.rightMargin = dp(activity, 16);
             params.bottomMargin = dp(activity, 10);
         }
         return params;
+    }
+
+    private static Drawable floatingTabBackground(Context context) {
+        boolean dark = (context.getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        int surface = ContextCompat.getColor(context,
+                io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low);
+        int variant = ContextCompat.getColor(context,
+                io.github.miam1ku.mibandoplusbridge.R.color.surface_variant);
+        int top = blend(variant, Color.WHITE, dark ? 0.06f : 0.35f);
+        int bottom = blend(surface, variant, dark ? 0.35f : 0.15f);
+        GradientDrawable glass = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{withAlpha(top, 0xF2), withAlpha(bottom, 0xE8)});
+        glass.setCornerRadius(dp(context, 32));
+        glass.setStroke(dp(context, 1), dark ? 0x33FFFFFF : 0x14000000);
+        return glass;
+    }
+
+    private static Drawable solidFloatingTabBackground(Context context) {
+        GradientDrawable solid = new GradientDrawable();
+        solid.setColor(ContextCompat.getColor(context,
+                io.github.miam1ku.mibandoplusbridge.R.color.surface_container_low));
+        solid.setCornerRadius(dp(context, 32));
+        solid.setStroke(dp(context, 1), ContextCompat.getColor(context,
+                io.github.miam1ku.mibandoplusbridge.R.color.outline_variant));
+        return solid;
+    }
+
+    private static int blend(int first, int second, float amount) {
+        float inverse = 1f - amount;
+        return Color.rgb(
+                Math.round(Color.red(first) * inverse + Color.red(second) * amount),
+                Math.round(Color.green(first) * inverse + Color.green(second) * amount),
+                Math.round(Color.blue(first) * inverse + Color.blue(second) * amount));
     }
 
     private static void configureEdgeToEdge(AppCompatActivity activity) {

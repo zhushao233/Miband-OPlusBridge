@@ -14,6 +14,7 @@ public final class UiStyle {
     private static final String PREFS = "appearance";
     private static final String THEME_KEY = "uiTheme";
     private static final String DOCK_KEY = "bottomBar";
+    private static final String GLASS_KEY = "liquidGlass";
 
     private UiStyle() {}
 
@@ -35,6 +36,10 @@ public final class UiStyle {
         return FLOATING.equals(dock(context));
     }
 
+    public static boolean glass(Context context) {
+        return LocalPrefs.open(context, PREFS).getBoolean(GLASS_KEY, true);
+    }
+
     public static boolean setTheme(Context context, String value) {
         String selected = MATERIAL.equals(value) ? MATERIAL : MIUIX;
         return LocalPrefs.open(context, PREFS).edit().putString(THEME_KEY, selected).commit();
@@ -45,8 +50,12 @@ public final class UiStyle {
         return LocalPrefs.open(context, PREFS).edit().putString(DOCK_KEY, selected).commit();
     }
 
+    public static boolean setGlass(Context context, boolean enabled) {
+        return LocalPrefs.open(context, PREFS).edit().putBoolean(GLASS_KEY, enabled).commit();
+    }
+
     public static String signature(Context context) {
-        return theme(context) + "/" + dock(context);
+        return theme(context) + "/" + dock(context) + "/" + glass(context);
     }
 
     public static String themeLabel(Context context) {
@@ -58,6 +67,8 @@ public final class UiStyle {
     }
 
     public static String summary(Context context) {
-        return themeLabel(context) + " 主题 · " + dockLabel(context);
+        String dock = dockLabel(context);
+        if (floating(context)) dock += glass(context) ? " · 液态玻璃" : " · 实色";
+        return themeLabel(context) + " 主题 · " + dock;
     }
 }
