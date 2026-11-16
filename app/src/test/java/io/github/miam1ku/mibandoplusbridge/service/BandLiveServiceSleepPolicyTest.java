@@ -110,6 +110,15 @@ public final class BandLiveServiceSleepPolicyTest {
         assertTrue(BandLiveService.historyShouldFlush(true, false, true));
     }
 
+    @Test public void manualSyncIsRetainedUntilHistoryPipelineIsReadyAndConsumedOnce() {
+        var requested = new java.util.concurrent.atomic.AtomicBoolean(true);
+        assertFalse(BandLiveService.consumeManualSync(requested, false));
+        assertTrue(requested.get());
+        assertTrue(BandLiveService.consumeManualSync(requested, true));
+        assertFalse(requested.get());
+        assertFalse(BandLiveService.consumeManualSync(requested, true));
+    }
+
     @Test public void sleepProtectionWindowEndsAtFourteen() {
         assertTrue(BandLiveService.isSleepProtectionWindow(22));
         assertTrue(BandLiveService.isSleepProtectionWindow(0));

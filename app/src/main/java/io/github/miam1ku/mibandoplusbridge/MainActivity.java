@@ -642,7 +642,7 @@ public final class MainActivity extends AppCompatActivity {
                 .setMessage("当前处于睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
                         + "导致睡眠图出现短暂清醒。是否仍要同步？")
                 .setNegativeButton("等待自动同步", (dialog, which) -> {
-                    ownershipStatus.setText("同步已排队，确认清醒后自动继续。");
+                    ownershipStatus.setText("当前同步已排队，睡眠保护解除后继续。");
                     changeOwnership(Change.RECONNECT);
                 })
                 .setPositiveButton("仍然同步", (dialog, which) ->
