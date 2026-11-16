@@ -9,24 +9,39 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.widget.FrameLayout
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets as ComposeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.tappableElement
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.itos.coui.backdrop.couiBackdrop
 import com.itos.coui.backdrop.rememberCouiBackdrop
+import com.itos.coui.effect.LocalCouiContourGlowEnabled
 import com.itos.coui.navigation.CouiNavigationItem
 import com.itos.coui.navigation.NavigationBar
 import com.itos.coui.theme.CouiTheme
@@ -57,7 +72,16 @@ class CouiTabBarView @JvmOverloads constructor(
     private var tabsVersion by mutableIntStateOf(0)
     private var selectedIndex by mutableIntStateOf(0)
     private var listener: OnTabSelectedListener? = null
+    private var rightActionIconRes by mutableIntStateOf(0)
+    private var rightActionShown by mutableStateOf(true)
+    private var rightActionLabel by mutableStateOf("")
+    private var rightActionColor by mutableIntStateOf(android.graphics.Color.WHITE)
+    private var rightContainerColor by mutableIntStateOf(android.graphics.Color.TRANSPARENT)
+    private var contourEnabled by mutableStateOf(true)
+    private var tooltipVisible by mutableStateOf(false)
+    private var onRightActionClick: Runnable? = null
     private var lastCaptureAt = 0L
+    private val hideTooltip = Runnable { tooltipVisible = false }
     private val preDraw = ViewTreeObserver.OnPreDrawListener {
         captureBackdrop()
         true
@@ -75,31 +99,65 @@ class CouiTabBarView @JvmOverloads constructor(
             val backdrop = rememberCouiBackdrop(drawSource = {
                 drawIntoCanvas { canvas -> canvas.nativeCanvas.drawRenderNode(backdropNode) }
             })
-            CouiTheme {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                    Box(
-                        Modifier.fillMaxSize()
-                            .graphicsLayer { alpha = 0f }
-                            .couiBackdrop(backdrop),
-                    )
-                    if (currentTabs.isNotEmpty()) {
-                        val index = selectedIndex.coerceIn(0, currentTabs.lastIndex)
-                        NavigationBar(
-                            modifier = Modifier.fillMaxWidth(),
-                            backdrop = backdrop,
-                            items = currentTabs.map { tab ->
-                                CouiNavigationItem(
-                                    title = tab.title,
-                                    icon = ImageVector.vectorResource(tab.iconRes),
-                                )
-                            },
-                            selectedIndex = index,
-                            onSelection = { next ->
-                                val tab = currentTabs.getOrNull(next) ?: return@NavigationBar
-                                selectedIndex = next
-                                listener?.onTabSelected(tab.itemId)
-                            },
+            CompositionLocalProvider(LocalCouiContourGlowEnabled provides contourEnabled) {
+                CouiTheme {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                        Box(
+                            Modifier.fillMaxSize()
+                                .graphicsLayer { alpha = 0f }
+                                .couiBackdrop(backdrop),
                         )
+                        if (currentTabs.isNotEmpty()) {
+                            val index = selectedIndex.coerceIn(0, currentTabs.lastIndex)
+                            val rightIcon = if (rightActionIconRes != 0) {
+                                ImageVector.vectorResource(rightActionIconRes)
+                            } else null
+                            NavigationBar(
+                                modifier = Modifier.fillMaxWidth(),
+                                backdrop = backdrop,
+                                items = currentTabs.map { tab ->
+                                    CouiNavigationItem(
+                                        title = tab.title,
+                                        icon = ImageVector.vectorResource(tab.iconRes),
+                                    )
+                                },
+                                selectedIndex = index,
+                                rightIcon = rightIcon,
+                                rightDescription = rightActionLabel.ifBlank { null },
+                                rightVisible = rightActionShown && rightIcon != null,
+                                onRightClick = { onRightActionClick?.run() },
+                                rightContainerColor = Color(rightContainerColor),
+                                rightIconColor = Color(rightActionColor),
+                                onSelection = { next ->
+                                    val tab = currentTabs.getOrNull(next) ?: return@NavigationBar
+                                    selectedIndex = next
+                                    listener?.onTabSelected(tab.itemId)
+                                },
+                            )
+                        }
+                        if (tooltipVisible && rightActionShown && rightActionLabel.isNotBlank()) {
+                            val insetBottom = with(LocalDensity.current) {
+                                ComposeWindowInsets.tappableElement.getBottom(this).toDp()
+                            }
+                            Box(
+                                Modifier.align(Alignment.BottomEnd)
+                                    .padding(end = 24.dp, bottom = 104.dp + insetBottom)
+                                    .background(
+                                        Color(0xE61C1C1E),
+                                        RoundedCornerShape(9.dp),
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                            ) {
+                                BasicText(
+                                    text = rightActionLabel,
+                                    style = TextStyle(
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    ),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -108,6 +166,26 @@ class CouiTabBarView @JvmOverloads constructor(
 
     fun setOnTabSelectedListener(listener: OnTabSelectedListener?) {
         this.listener = listener
+    }
+
+    fun setRightAction(iconRes: Int, label: String, iconColor: Int, containerColor: Int) {
+        rightActionIconRes = iconRes
+        rightActionLabel = label
+        rightActionColor = iconColor
+        rightContainerColor = containerColor
+    }
+
+    fun setRightActionVisible(visible: Boolean) {
+        rightActionShown = visible
+        if (!visible) tooltipVisible = false
+    }
+
+    fun setOnRightActionClickListener(listener: Runnable?) {
+        onRightActionClick = listener
+    }
+
+    fun setContourGlowEnabled(enabled: Boolean) {
+        contourEnabled = enabled
     }
 
     fun setMenu(menuRes: Int, checkedItemId: Int) {
@@ -142,8 +220,19 @@ class CouiTabBarView @JvmOverloads constructor(
     fun getSelectedId(): Int = tabs.getOrNull(selectedIndex)?.itemId ?: View.NO_ID
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN && !isInsideNavigationBar(event.y)) {
-            return false
+        val insideNavigationBar = isInsideNavigationBar(event.y)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                if (!insideNavigationBar) return false
+                removeCallbacks(hideTooltip)
+                tooltipVisible = isInsideRightAction(event.x, event.y)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (tooltipVisible) {
+                    removeCallbacks(hideTooltip)
+                    postDelayed(hideTooltip, 550L)
+                }
+            }
         }
         return super.dispatchTouchEvent(event)
     }
@@ -156,6 +245,7 @@ class CouiTabBarView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         val observer = viewTreeObserver
         if (observer.isAlive) observer.removeOnPreDrawListener(preDraw)
+        removeCallbacks(hideTooltip)
         backdropNode.discardDisplayList()
         super.onDetachedFromWindow()
     }
@@ -164,6 +254,15 @@ class CouiTabBarView @JvmOverloads constructor(
         val inset = rootWindowInsets
             ?.getInsets(WindowInsets.Type.tappableElement())?.bottom ?: 0
         return y >= height - dp(104) - inset
+    }
+
+    private fun isInsideRightAction(x: Float, y: Float): Boolean {
+        if (!rightActionShown || rightActionLabel.isBlank()) return false
+        val inset = rootWindowInsets
+            ?.getInsets(WindowInsets.Type.tappableElement())?.bottom ?: 0
+        val top = height - inset - dp(72)
+        val bottom = height - inset - dp(12)
+        return x >= width - dp(80) && y in top.toFloat()..bottom.toFloat()
     }
 
     private fun captureBackdrop() {

@@ -11,6 +11,8 @@ public final class UiStyle {
 
     private static final String PREFS = "appearance";
     private static final String THEME_KEY = "uiTheme";
+    private static final String CONTOUR_GLOW_KEY = "couiContourGlow";
+    private static final String SYNC_ACTION_KEY = "syncActionVisible";
 
     private UiStyle() {}
 
@@ -32,11 +34,31 @@ public final class UiStyle {
         return theme(context);
     }
 
+    public static boolean contourGlow(Context context) {
+        return LocalPrefs.open(context, PREFS).getBoolean(CONTOUR_GLOW_KEY, true);
+    }
+
+    public static boolean setContourGlow(Context context, boolean enabled) {
+        return LocalPrefs.open(context, PREFS).edit()
+                .putBoolean(CONTOUR_GLOW_KEY, enabled).commit();
+    }
+
+    public static boolean syncActionVisible(Context context) {
+        return LocalPrefs.open(context, PREFS).getBoolean(SYNC_ACTION_KEY, true);
+    }
+
+    public static boolean setSyncActionVisible(Context context, boolean visible) {
+        return LocalPrefs.open(context, PREFS).edit()
+                .putBoolean(SYNC_ACTION_KEY, visible).commit();
+    }
+
     public static String themeLabel(Context context) {
         return material(context) ? "Material" : "Miuix";
     }
 
     public static String summary(Context context) {
-        return themeLabel(context) + " 主题 · COUI 凝光视效";
+        return (contourGlow(context) ? "轮廓光开" : "轮廓光关")
+                + " · 同步手环" + (syncActionVisible(context) ? "显示" : "隐藏")
+                + " · COUI 凝光视效";
     }
 }

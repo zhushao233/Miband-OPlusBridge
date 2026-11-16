@@ -37,7 +37,6 @@ import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
 import io.github.miam1ku.mibandoplusbridge.data.HealthRecordStore;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
 import io.github.miam1ku.mibandoplusbridge.data.TransportObservation;
-import io.github.miam1ku.mibandoplusbridge.integration.BandDetailsActivity;
 import io.github.miam1ku.mibandoplusbridge.integration.CredentialProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.DeviceCardProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
@@ -86,7 +85,6 @@ public final class MainActivity extends AppCompatActivity {
     private BridgeScreen appearancePage;
     private int currentTabId = R.id.tab_device;
     private boolean secondaryPage;
-    private String styleSignature;
     private OnBackPressedCallback backCallback;
 
     private final List<View> boundViews = new ArrayList<>();
@@ -160,9 +158,9 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        styleSignature = UiStyle.signature(this);
         screen = BridgeScreen.attachTabs(this, "设备", R.menu.main_bottom,
                 R.id.tab_device, this::selectTab);
+        screen.setSyncAction(this::syncNow);
         devicePage = screen.page();
         toolsPage = screen.page();
         settingsPage = screen.page();
@@ -501,7 +499,8 @@ public final class MainActivity extends AppCompatActivity {
         toolsPage.heading("快捷入口");
         LinearLayout links = toolsPage.card();
         deviceDetailRow = toolsPage.navRow(links, "设备详情",
-                () -> startActivity(new Intent(this, BandDetailsActivity.class)));
+                () -> startActivity(new Intent().setClassName(this,
+                        "io.github.miam1ku.mibandoplusbridge.integration.BandDetailsInternalActivity")));
         deviceDetailRow.setSummary("已保存历史、日汇总核对");
         deviceDetailRow.setIcon(rowIcon(R.drawable.ic_tab_device));
         MiuixBasicView weather = toolsPage.navRow(links, "天气同步",
@@ -543,7 +542,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout appearance = settingsPage.card();
         appearanceRow = settingsPage.navRow(appearance, "主题与布局",
                 () -> showSecondaryPage(appearancePage, "主题与布局", this::refreshSettingsRows));
-        appearanceRow.setIcon(rowIcon(R.drawable.ic_settings));
+        appearanceRow.setIcon(rowIcon(R.drawable.ic_appearance));
 
         settingsPage.heading("应用权限");
         LinearLayout permissions = settingsPage.card();
@@ -552,7 +551,7 @@ public final class MainActivity extends AppCompatActivity {
             showSecondaryPage(permissionsPage, "权限与后台", this::refreshPermissionRows);
         });
         permissionRow.setSummary("附近设备、自启动与关联启动");
-        permissionRow.setIcon(rowIcon(R.drawable.ic_nearby));
+        permissionRow.setIcon(rowIcon(R.drawable.ic_permissions));
 
         settingsPage.heading("高级");
         LinearLayout advanced = settingsPage.card();
@@ -800,54 +799,44 @@ public final class MainActivity extends AppCompatActivity {
     // ---- appearance page ----
 
     private void buildAppearancePage() {
-        LinearLayout themeCard = appearancePage.card();
-        appearancePage.title(themeCard, "主题风格");
-        appearancePage.caption(themeCard, "在 Miuix 与 Material 组件语言之间切换。");
-        addChoiceGroup(themeCard, new String[]{"Miuix", "Material"},
-                UiStyle.material(this) ? 1 : 0,
-                index -> {
-                    if (UiStyle.setTheme(this, index == 1 ? UiStyle.MATERIAL : UiStyle.MIUIX)) {
-                        styleSignature = UiStyle.signature(this);
-                        recreate();
-                    } else {
-                        Toast.makeText(this, "主题设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
-                    }
-                });
+        LinearLayout effects = appearancePage.card();
+        appearancePage.title(effects, "凝光视效");
+        appearancePage.caption(effects,
+                "控制底栏、返回按钮等 COUI 组件的轮廓高光与内光晕，模糊和投影保持原样。");
+        BridgeScreen.ToggleRow contour = appearancePage.switchRow(effects, "轮廓光",
+                "关闭后保留组件材质，只隐藏描边与内光晕。");
+        contour.setChecked(UiStyle.contourGlow(this));
+        contour.setOnStateChangeListener(checked -> {
+            if (!UiStyle.setContourGlow(this, checked)) {
+                Toast.makeText(this, "轮廓光设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            screen.setContourGlowEnabled(checked);
+            refreshSettingsRows();
+            return true;
+        });
 
-        appearancePage.caption("底栏固定使用 COUI 的 ColorOS 17「凝光视效」。主题切换会调整卡片圆角与组件密度。");
-    }
-
-    private interface Choice { void onSelected(int index); }
-
-    private void addChoiceGroup(LinearLayout card, String[] labels, int selected, Choice callback) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(dp(4), dp(4), dp(4), dp(4));
-        row.setBackground(BridgeScreen.roundedRect(color(R.color.surface_variant), dp(16), 0, 0));
-        addWithMargins(card, row, 16, 12, 16, 12);
-        for (int index = 0; index < labels.length; index++) {
-            boolean active = index == selected;
-            TextView choice = text(15, active ? R.color.on_primary : R.color.on_surface_variant, true);
-            choice.setText(labels[index]);
-            choice.setGravity(Gravity.CENTER);
-            choice.setPadding(dp(12), dp(11), dp(12), dp(11));
-            choice.setBackground(BridgeScreen.roundedRect(
-                    active ? color(R.color.accent) : android.graphics.Color.TRANSPARENT,
-                    dp(12), 0, 0));
-            int chosen = index;
-            choice.setOnClickListener(view -> callback.onSelected(chosen));
-            row.addView(choice, new LinearLayout.LayoutParams(0, -2, 1f));
-        }
+        LinearLayout dock = appearancePage.card();
+        appearancePage.title(dock, "底栏");
+        BridgeScreen.ToggleRow sync = appearancePage.switchRow(dock, "显示同步手环按钮",
+                "在底栏右侧显示蓝色线性刷新按钮，按下会显示提示。");
+        sync.setChecked(UiStyle.syncActionVisible(this));
+        sync.setOnStateChangeListener(checked -> {
+            if (!UiStyle.setSyncActionVisible(this, checked)) {
+                Toast.makeText(this, "底栏设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            screen.setSyncActionVisible(checked);
+            refreshSettingsRows();
+            return true;
+        });
+        appearancePage.caption("修改后立即生效，当前页面保持打开。");
     }
 
     // ---- lifecycle ----
 
     @Override protected void onResume() {
         super.onResume();
-        if (!styleSignature.equals(UiStyle.signature(this))) {
-            recreate();
-            return;
-        }
         refreshNotices();
         refreshTools();
         refreshPermissionRows();

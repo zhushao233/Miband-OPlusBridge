@@ -10,6 +10,7 @@ import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -30,13 +31,15 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.core.widget.NestedScrollView;
+import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
 import com.hchen.himiuix.MiuixAppBar;
 import com.hchen.himiuix.MiuixBasicView;
 import com.hchen.himiuix.MiuixViewGroup;
 import com.hchen.himiuix.fill.MiuixFillView;
 import com.hchen.himiuix.helper.WindowInsetsHelper;
 import com.hchen.himiuix.widget.MiuixTextView;
-import com.google.android.material.materialswitch.MaterialSwitch;
+import com.itos.coui.host.CouiBackButtonView;
+import com.itos.coui.host.CouiSwitchView;
 import com.itos.coui.host.CouiTabBarView;
 import java.util.ArrayList;
 import java.util.List;
@@ -66,23 +69,26 @@ public final class BridgeScreen {
     private final NestedScrollView scroll;
     private final CouiTabBarView tabBar;
     private final View tabBarContainer;
+    private final CouiBackButtonView backButton;
     private final MiuixFillView pageHost;
     private final FrameLayout pageFrame;
     private final List<LinearLayout> pages = new ArrayList<>();
     private LinearLayout visiblePage;
     private AnimatorSet pageAnimator;
     private int pageAnimationToken;
+    private int bottomClearance;
     private boolean predictiveBack;
     private LinearLayout predictiveSource;
     private LinearLayout predictiveTarget;
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body) {
-        this(activity, body, null, null, null, null, null, null);
+        this(activity, body, null, null, null, null, null, null, null);
     }
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body, MiuixAppBar appBar,
                          NestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
-                         CouiTabBarView tabBar, View tabBarContainer) {
+                         CouiTabBarView tabBar, View tabBarContainer,
+                         CouiBackButtonView backButton) {
         this.activity = activity;
         this.body = body;
         this.appBar = appBar;
@@ -91,6 +97,7 @@ public final class BridgeScreen {
         this.pageFrame = pageFrame;
         this.tabBar = tabBar;
         this.tabBarContainer = tabBarContainer;
+        this.backButton = backButton;
     }
 
     public static BridgeScreen attach(AppCompatActivity activity, String title, boolean back) {
@@ -98,26 +105,26 @@ public final class BridgeScreen {
 
         MiuixAppBar appBar = new MiuixAppBar(activity);
         appBar.setTitle(title);
-        if (back) {
-            appBar.getToolbar().setNavigationOnClickListener(view -> activity.finish());
-        } else {
-            appBar.getToolbar().setNavigationIcon(null);
-        }
+        appBar.getToolbar().setNavigationIcon(null);
 
-        NestedScrollView scroll = new NestedScrollView(activity);
+        NestedScrollView scroll = new CouiNestedScrollView(activity);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
-        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
         MiuixFillView body = new MiuixFillView(activity);
-        body.setBackgroundResource(com.hchen.himiuix.R.color.miuix_theme_color);
+        body.setBackgroundResource(surfaceRes(activity));
         int topInset = body.getPaddingTop();
         int navigationHeight = navigationBarHeight(activity);
         body.setPadding(0, topInset + dp(activity, 4), 0,
                 navigationHeight + dp(activity, 24));
         scroll.addView(body, new NestedScrollView.LayoutParams(-1, -2));
         appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
-        activity.setContentView(appBar);
+
+        FrameLayout root = new FrameLayout(activity);
+        root.addView(appBar, new FrameLayout.LayoutParams(-1, -1));
+        CouiBackButtonView backButton = addCouiBackButton(activity, root, appBar, back);
+        if (back) backButton.setOnBackClickListener(activity::finish);
+        activity.setContentView(root);
 
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -129,7 +136,8 @@ public final class BridgeScreen {
             appBar.targetStart(scroll);
             appBar.targetRegister(scroll);
         });
-        return new BridgeScreen(activity, body);
+        return new BridgeScreen(activity, body, appBar, scroll, null, null, null, null,
+                backButton);
     }
 
     /**
@@ -142,33 +150,27 @@ public final class BridgeScreen {
 
         FrameLayout shell = new FrameLayout(activity);
         shell.setClipChildren(false);
-        shell.setBackgroundResource(UiStyle.material(activity)
-                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
-                : com.hchen.himiuix.R.color.miuix_theme_color);
+        shell.setBackgroundResource(surfaceRes(activity));
         FrameLayout contentRoot = new FrameLayout(activity);
-        contentRoot.setBackgroundResource(UiStyle.material(activity)
-                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
-                : com.hchen.himiuix.R.color.miuix_theme_color);
+        contentRoot.setBackgroundResource(surfaceRes(activity));
         shell.addView(contentRoot, new FrameLayout.LayoutParams(-1, -1));
 
         MiuixAppBar appBar = new MiuixAppBar(activity);
         appBar.setTitle(title);
         appBar.getToolbar().setNavigationIcon(null);
 
-        NestedScrollView scroll = new NestedScrollView(activity);
+        NestedScrollView scroll = new CouiNestedScrollView(activity);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
-        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
         MiuixFillView pageHost = new MiuixFillView(activity);
         pageHost.setOrientation(LinearLayout.VERTICAL);
-        pageHost.setBackgroundResource(UiStyle.material(activity)
-                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
-                : com.hchen.himiuix.R.color.miuix_theme_color);
+        pageHost.setBackgroundResource(surfaceRes(activity));
         int topInset = pageHost.getPaddingTop();
-        pageHost.setPadding(0, topInset, 0, dp(activity, 104));
+        pageHost.setPadding(0, topInset, 0, 0);
         FrameLayout pageFrame = new FrameLayout(activity);
         pageFrame.setClipChildren(true);
+        pageFrame.setBackgroundResource(surfaceRes(activity));
         pageHost.addView(pageFrame, new LinearLayout.LayoutParams(-1, -2));
         scroll.addView(pageHost, new NestedScrollView.LayoutParams(-1, -2));
         appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
@@ -180,21 +182,35 @@ public final class BridgeScreen {
         tabBar.setOnTabSelectedListener(itemId -> {
             if (listener != null) listener.onTabSelected(itemId);
         });
+        tabBar.setRightAction(io.github.miam1ku.mibandoplusbridge.R.drawable.ic_sync,
+                "同步手环",
+                Color.WHITE,
+                Color.rgb(0x41, 0x77, 0xF0));
+        tabBar.setRightActionVisible(UiStyle.syncActionVisible(activity));
+        tabBar.setContourGlowEnabled(UiStyle.contourGlow(activity));
 
         shell.addView(tabBar, new FrameLayout.LayoutParams(-1, -1));
 
+        CouiBackButtonView backButton = addCouiBackButton(activity, shell, appBar, false);
         activity.setContentView(shell);
+        BridgeScreen screen = new BridgeScreen(activity, pageHost, appBar, scroll, pageHost,
+                pageFrame, tabBar, tabBar, backButton);
+        screen.bottomClearance = dp(activity, 104);
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 104) + bars.bottom);
+            pageHost.setPadding(bars.left, topInset, bars.right, 0);
+            screen.bottomClearance = dp(activity, 104) + bars.bottom;
+            for (LinearLayout page : screen.pages) {
+                page.setPadding(0, 0, 0, screen.bottomClearance);
+                screen.fillPageViewport(page);
+            }
             return insets;
         });
         appBar.post(() -> {
             appBar.targetStart(scroll);
             appBar.targetRegister(scroll);
         });
-        return new BridgeScreen(activity, pageHost, appBar, scroll, pageHost, pageFrame,
-                tabBar, tabBar);
+        return screen;
     }
 
     /** Adds a page below the main shell and returns helpers bound to that page. */
@@ -202,8 +218,11 @@ public final class BridgeScreen {
         if (pageFrame == null) throw new IllegalStateException("PAGES_REQUIRE_TABS");
         LinearLayout page = new LinearLayout(activity);
         page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundResource(surfaceRes(activity));
+        page.setPadding(0, 0, 0, bottomClearance);
         page.setVisibility(View.GONE);
         pageFrame.addView(page, new FrameLayout.LayoutParams(-1, -2));
+        page.post(() -> fillPageViewport(page));
         pages.add(page);
         return new BridgeScreen(activity, page);
     }
@@ -215,15 +234,30 @@ public final class BridgeScreen {
     public void setPageChrome(String title, boolean back, Runnable onBack) {
         if (appBar == null) return;
         appBar.setTitle(title);
+        appBar.getToolbar().setNavigationIcon(null);
         if (back) {
-            appBar.getToolbar().setNavigationIcon(com.hchen.himiuix.R.drawable.miuix_back);
-            appBar.getToolbar().setNavigationOnClickListener(view -> {
+            appBar.getToolbar().setNavigationOnClickListener(null);
+            if (backButton != null) backButton.setVisibility(View.VISIBLE);
+            if (backButton != null) backButton.setOnBackClickListener(() -> {
                 if (onBack != null) onBack.run();
             });
         } else {
-            appBar.getToolbar().setNavigationIcon(null);
             appBar.getToolbar().setNavigationOnClickListener(null);
+            if (backButton != null) backButton.setVisibility(View.GONE);
         }
+    }
+
+    public void setContourGlowEnabled(boolean enabled) {
+        if (tabBar != null) tabBar.setContourGlowEnabled(enabled);
+        if (backButton != null) backButton.setContourGlowEnabled(enabled);
+    }
+
+    public void setSyncAction(Runnable action) {
+        if (tabBar != null) tabBar.setOnRightActionClickListener(action);
+    }
+
+    public void setSyncActionVisible(boolean visible) {
+        if (tabBar != null) tabBar.setRightActionVisible(visible);
     }
 
     public void setTabBarVisible(boolean visible) {
@@ -254,25 +288,40 @@ public final class BridgeScreen {
             return;
         }
         discardPredictiveBack();
+        boolean interrupting = pageAnimator != null;
         cancelPageAnimation();
 
-        LinearLayout source = visiblePage;
-        for (LinearLayout page : pages) {
-            if (page != source && page != target) hidePage(page);
+        LinearLayout source = interrupting ? currentDominantPage() : visiblePage;
+        fillPageViewport(target);
+        fillPageViewport(source);
+        if (!interrupting || transition != PageTransition.TAB) {
+            for (LinearLayout page : pages) {
+                if (page != source && page != target) hidePage(page);
+            }
         }
-        if (target == source && target.getVisibility() == View.VISIBLE) return;
+        if (target == source && target.getVisibility() == View.VISIBLE && !interrupting
+                && Math.abs(target.getTranslationX()) < 0.5f) return;
 
+        boolean targetVisible = target.getVisibility() == View.VISIBLE;
         target.setVisibility(View.VISIBLE);
-        resetPage(target);
-        if (source != null) resetPage(source);
-        if (!animate || source == null || source == target || !target.isLaidOut()) {
+        if (!animate || source == null
+                || (source == target && (transition != PageTransition.TAB || !interrupting))
+                || !target.isLaidOut()) {
             completePage(target);
             return;
         }
         switch (transition) {
-            case TAB -> slideTabs(source, target);
-            case FORWARD -> slideForward(source, target);
-            case BACK -> slideBack(source, target);
+            case TAB -> slideTabs(target, targetVisible, source);
+            case FORWARD -> {
+                resetPage(target);
+                resetPage(source);
+                slideForward(source, target);
+            }
+            case BACK -> {
+                resetPage(target);
+                resetPage(source);
+                slideBack(source, target);
+            }
             default -> completePage(target);
         }
     }
@@ -291,9 +340,10 @@ public final class BridgeScreen {
         }
 
         resetPage(predictiveTarget);
+        fillPageViewport(predictiveTarget);
+        fillPageViewport(predictiveSource);
         predictiveTarget.setVisibility(View.VISIBLE);
-        predictiveTarget.setAlpha(0.72f);
-        predictiveTarget.setTranslationX(-dp(activity, 14));
+        predictiveTarget.setTranslationX(-pageWidth() * 0.32f);
         predictiveTarget.setTranslationZ(0f);
         resetPage(predictiveSource);
         predictiveSource.setTranslationZ(dp(activity, 1));
@@ -312,10 +362,8 @@ public final class BridgeScreen {
         if (!predictiveBack || predictiveSource == null || predictiveTarget == null) return;
         float value = Math.max(0f, Math.min(1f, progress));
         float width = Math.max(1, predictiveSource.getWidth());
-        predictiveSource.setTranslationX(width * 0.92f * value);
-        predictiveSource.setAlpha(1f - 0.58f * value);
-        predictiveTarget.setTranslationX(-dp(activity, 14) * (1f - value));
-        predictiveTarget.setAlpha(0.72f + 0.28f * value);
+        predictiveSource.setTranslationX(width * value);
+        predictiveTarget.setTranslationX(-pageWidth() * 0.32f * (1f - value));
         if (tabBarContainer != null) {
             tabBarContainer.setAlpha(value);
             tabBarContainer.setTranslationY(dp(activity, 8) * (1f - value));
@@ -334,10 +382,8 @@ public final class BridgeScreen {
         restore.playTogether(
                 ObjectAnimator.ofFloat(source, View.TRANSLATION_X,
                         source.getTranslationX(), 0f),
-                ObjectAnimator.ofFloat(source, View.ALPHA, source.getAlpha(), 1f),
                 ObjectAnimator.ofFloat(target, View.TRANSLATION_X,
-                        target.getTranslationX(), -dp(activity, 14)),
-                ObjectAnimator.ofFloat(target, View.ALPHA, target.getAlpha(), 0f));
+                        target.getTranslationX(), -pageWidth() * 0.32f));
         if (tabBarContainer != null) {
             restore.playTogether(
                     ObjectAnimator.ofFloat(tabBarContainer, View.ALPHA,
@@ -346,7 +392,7 @@ public final class BridgeScreen {
                             tabBarContainer.getTranslationY(), dp(activity, 8)));
         }
         restore.setDuration(180);
-        restore.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        restore.setInterpolator(new FastOutSlowInInterpolator());
         runPageAnimation(restore, () -> {
             hidePage(target);
             resetPage(source);
@@ -373,10 +419,8 @@ public final class BridgeScreen {
         commit.playTogether(
                 ObjectAnimator.ofFloat(source, View.TRANSLATION_X,
                         source.getTranslationX(), width),
-                ObjectAnimator.ofFloat(source, View.ALPHA, source.getAlpha(), 0f),
                 ObjectAnimator.ofFloat(target, View.TRANSLATION_X,
-                        target.getTranslationX(), 0f),
-                ObjectAnimator.ofFloat(target, View.ALPHA, target.getAlpha(), 1f));
+                        target.getTranslationX(), 0f));
         if (tabBarContainer != null) {
             commit.playTogether(
                     ObjectAnimator.ofFloat(tabBarContainer, View.ALPHA,
@@ -385,7 +429,7 @@ public final class BridgeScreen {
                             tabBarContainer.getTranslationY(), 0f));
         }
         commit.setDuration(190);
-        commit.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+        commit.setInterpolator(new FastOutSlowInInterpolator());
         runPageAnimation(commit, () -> {
             completePage(target);
             clearPredictivePages();
@@ -397,60 +441,103 @@ public final class BridgeScreen {
         });
     }
 
-    private void slideTabs(LinearLayout source, LinearLayout target) {
-        boolean forward = pages.indexOf(target) > pages.indexOf(source);
-        float distance = Math.max(dp(activity, 48), pageFrame.getWidth() * 0.34f);
-        float targetStart = forward ? distance : -distance;
-        float sourceEnd = forward ? -distance * 0.45f : distance * 0.45f;
+    private void slideTabs(LinearLayout target, boolean targetVisible, LinearLayout dominant) {
+        int targetIndex = pages.indexOf(target);
+        float distance = pageWidth();
+        boolean forward = dominant == null || dominant == target
+                || pages.indexOf(dominant) < targetIndex;
+        target.setTranslationX(targetVisible
+                ? target.getTranslationX()
+                : (forward ? distance : -distance));
+        target.setTranslationZ(dp(activity, 1));
 
-        target.setAlpha(0.6f);
-        target.setTranslationX(targetStart);
-        source.setAlpha(1f);
-        source.setTranslationX(0f);
-
+        List<Animator> slides = new ArrayList<>();
+        for (LinearLayout page : pages) {
+            if (page == target) {
+                slides.add(ObjectAnimator.ofFloat(page, View.TRANSLATION_X,
+                        page.getTranslationX(), 0f));
+                continue;
+            }
+            int index = pages.indexOf(page);
+            float end = index < targetIndex ? -distance : distance;
+            if (page.getVisibility() != View.VISIBLE) continue;
+            page.setTranslationZ(0f);
+            float start = page.getTranslationX();
+            if (Math.abs(start - end) < 0.5f) {
+                page.setTranslationX(end);
+                hidePage(page);
+                continue;
+            }
+            slides.add(ObjectAnimator.ofFloat(page, View.TRANSLATION_X, start, end));
+        }
+        if (slides.isEmpty()) {
+            completePage(target);
+            return;
+        }
         AnimatorSet animation = new AnimatorSet();
-        animation.playTogether(
-                ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0f),
-                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, sourceEnd),
-                ObjectAnimator.ofFloat(target, View.ALPHA, 0.6f, 1f),
-                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, targetStart, 0f));
-        animation.setDuration(280);
+        animation.playTogether(slides);
+        animation.setDuration(320);
         animation.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
         runPageAnimation(animation, () -> completePage(target));
     }
 
+    private LinearLayout currentDominantPage() {
+        LinearLayout best = null;
+        float bestDistance = Float.MAX_VALUE;
+        for (LinearLayout page : pages) {
+            if (page.getVisibility() != View.VISIBLE) continue;
+            float distance = Math.abs(page.getTranslationX());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = page;
+            }
+        }
+        return best == null ? visiblePage : best;
+    }
+
     private void slideForward(LinearLayout source, LinearLayout target) {
-        target.setAlpha(0f);
-        target.setTranslationX(dp(activity, 30));
+        float distance = pageWidth();
+        target.setTranslationX(distance);
         target.setTranslationZ(dp(activity, 1));
+        source.setTranslationX(0f);
         source.setTranslationZ(0f);
 
         AnimatorSet animation = new AnimatorSet();
         animation.playTogether(
-                ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0.25f),
-                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, -dp(activity, 22)),
-                ObjectAnimator.ofFloat(target, View.ALPHA, 0f, 1f),
-                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, dp(activity, 30), 0f));
-        animation.setDuration(270);
-        animation.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, -distance * 0.32f),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, distance, 0f));
+        animation.setDuration(350);
+        animation.setInterpolator(new FastOutSlowInInterpolator());
         runPageAnimation(animation, () -> completePage(target));
     }
 
     private void slideBack(LinearLayout source, LinearLayout target) {
-        target.setAlpha(0.72f);
-        target.setTranslationX(-dp(activity, 14));
+        float distance = pageWidth();
+        target.setTranslationX(-distance * 0.32f);
         target.setTranslationZ(0f);
+        source.setTranslationX(0f);
         source.setTranslationZ(dp(activity, 1));
 
         AnimatorSet animation = new AnimatorSet();
         animation.playTogether(
-                ObjectAnimator.ofFloat(source, View.ALPHA, 1f, 0f),
-                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, dp(activity, 48)),
-                ObjectAnimator.ofFloat(target, View.ALPHA, 0.72f, 1f),
-                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, -dp(activity, 14), 0f));
-        animation.setDuration(250);
-        animation.setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f));
+                ObjectAnimator.ofFloat(source, View.TRANSLATION_X, 0f, distance),
+                ObjectAnimator.ofFloat(target, View.TRANSLATION_X, -distance * 0.32f, 0f));
+        animation.setDuration(320);
+        animation.setInterpolator(new FastOutSlowInInterpolator());
         runPageAnimation(animation, () -> completePage(target));
+    }
+
+    private float pageWidth() {
+        int width = pageFrame == null ? 0 : pageFrame.getWidth();
+        return width > 0 ? width : dp(activity, 360);
+    }
+
+    private void fillPageViewport(LinearLayout page) {
+        if (page == null || scroll == null || pageHost == null) return;
+        int height = scroll.getHeight() - pageHost.getPaddingTop();
+        if (height <= 0) return;
+        page.setMinimumHeight(height);
+        if (pageFrame != null) pageFrame.setMinimumHeight(height);
     }
 
     private void runPageAnimation(AnimatorSet animator, Runnable completion) {
@@ -514,9 +601,36 @@ public final class BridgeScreen {
         predictiveTarget = null;
     }
 
+    private static CouiBackButtonView addCouiBackButton(AppCompatActivity activity,
+                                                         FrameLayout root, MiuixAppBar appBar,
+                                                         boolean visible) {
+        CouiBackButtonView button = new CouiBackButtonView(activity, appBar);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                dp(activity, 64), dp(activity, 104), Gravity.TOP | Gravity.START);
+        params.leftMargin = dp(activity, 2);
+        params.topMargin = dp(activity, 0);
+        root.addView(button, params);
+        button.setContourGlowEnabled(UiStyle.contourGlow(activity));
+        button.setVisibility(visible ? View.VISIBLE : View.GONE);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            FrameLayout.LayoutParams current =
+                    (FrameLayout.LayoutParams) button.getLayoutParams();
+            int top = Math.max(0, bars.top - dp(activity, 24));
+            if (current.topMargin != top) {
+                current.topMargin = top;
+                button.setLayoutParams(current);
+            }
+            return insets;
+        });
+        return button;
+    }
+
     private static void configureEdgeToEdge(AppCompatActivity activity) {
         Window window = activity.getWindow();
         WindowCompat.setDecorFitsSystemWindows(window, false);
+        window.setBackgroundDrawable(new ColorDrawable(ContextCompat.getColor(activity,
+                surfaceRes(activity))));
         window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(Color.TRANSPARENT);
         window.setNavigationBarContrastEnforced(false);
@@ -527,6 +641,12 @@ public final class BridgeScreen {
         controller.setAppearanceLightStatusBars(!dark);
         controller.setAppearanceLightNavigationBars(!dark);
         WindowInsetsHelper.initialWindowInsetsListener(activity);
+    }
+
+    private static int surfaceRes(Context context) {
+        return UiStyle.material(context)
+                ? io.github.miam1ku.mibandoplusbridge.R.color.surface
+                : com.hchen.himiuix.R.color.miuix_theme_color;
     }
 
     // ---- text ----
@@ -820,8 +940,7 @@ public final class BridgeScreen {
             boolean onStateChange(boolean checked);
         }
 
-        private final MaterialSwitch toggle;
-        private boolean updating;
+        private final CouiSwitchView toggle;
 
         ToggleRow(Context context, String title, String summary) {
             super(context);
@@ -852,13 +971,7 @@ public final class BridgeScreen {
             summaryParams.topMargin = dp(context, 3);
             copy.addView(summaryView, summaryParams);
 
-            toggle = new MaterialSwitch(context);
-            int on = ContextCompat.getColor(context, com.hchen.himiuix.R.color.miuix_switch_on);
-            int off = ContextCompat.getColor(context, com.hchen.himiuix.R.color.miuix_switch_off);
-            toggle.setTrackTintList(new ColorStateList(
-                    new int[][]{{android.R.attr.state_checked}, {}},
-                    new int[]{on, off}));
-            toggle.setThumbTintList(ColorStateList.valueOf(Color.WHITE));
+            toggle = new CouiSwitchView(context);
             LayoutParams toggleParams = new LayoutParams(-2, -2);
             toggleParams.leftMargin = dp(context, 14);
             addView(toggle, toggleParams);
@@ -867,9 +980,7 @@ public final class BridgeScreen {
         }
 
         public void setChecked(boolean checked) {
-            updating = true;
             toggle.setChecked(checked);
-            updating = false;
         }
 
         public boolean isChecked() {
@@ -877,12 +988,10 @@ public final class BridgeScreen {
         }
 
         public void setOnStateChangeListener(OnStateChangeListener listener) {
-            toggle.setOnCheckedChangeListener((button, checked) -> {
-                if (updating || listener == null) return;
-                if (listener.onStateChange(checked)) return;
-                updating = true;
-                button.setChecked(!checked);
-                updating = false;
+            toggle.setOnCheckedChangeListener(checked -> {
+                if (listener != null && !listener.onStateChange(checked)) {
+                    toggle.setChecked(!checked);
+                }
             });
         }
     }
