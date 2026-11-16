@@ -112,11 +112,24 @@ public final class BandLiveServiceSleepPolicyTest {
 
     @Test public void manualSyncIsRetainedUntilHistoryPipelineIsReadyAndConsumedOnce() {
         var requested = new java.util.concurrent.atomic.AtomicBoolean(true);
-        assertFalse(BandLiveService.consumeManualSync(requested, false));
+        long requestedAtMs = 1_000L;
+        assertFalse(BandLiveService.consumeManualSync(requested, false, requestedAtMs, requestedAtMs + 1));
         assertTrue(requested.get());
-        assertTrue(BandLiveService.consumeManualSync(requested, true));
+        assertTrue(BandLiveService.consumeManualSync(requested, true, requestedAtMs, requestedAtMs + 1));
         assertFalse(requested.get());
-        assertFalse(BandLiveService.consumeManualSync(requested, true));
+        assertFalse(BandLiveService.consumeManualSync(requested, true, requestedAtMs, requestedAtMs + 1));
+    }
+
+    @Test public void manualSyncOverrideExpiresAfterOneMinute() {
+        var requested = new java.util.concurrent.atomic.AtomicBoolean(true);
+        long requestedAtMs = 1_000L;
+        assertTrue(BandLiveService.consumeManualSync(requested, true, requestedAtMs, requestedAtMs + 60_000L));
+        assertFalse(requested.get());
+
+        requested.set(true);
+        assertFalse(BandLiveService.consumeManualSync(requested, true, requestedAtMs,
+                requestedAtMs + 60_001L));
+        assertFalse(requested.get());
     }
 
     @Test public void sleepProtectionWindowEndsAtFourteen() {

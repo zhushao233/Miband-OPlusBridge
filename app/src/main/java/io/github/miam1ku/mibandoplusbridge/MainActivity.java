@@ -511,10 +511,14 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void changeOwnership(Change change) {
-        changeOwnership(change, false);
+        changeOwnership(change, false, false);
     }
 
     private void changeOwnership(Change change, boolean manualSync) {
+        changeOwnership(change, manualSync, false);
+    }
+
+    private void changeOwnership(Change change, boolean manualSync, boolean queuedSyncNotice) {
         if (worker.isShutdown() || changingOwnership) return;
         if (!rootGranted) {
             requestRoot();
@@ -534,6 +538,7 @@ public final class MainActivity extends AppCompatActivity {
             boolean registrationSaved = false;
             boolean removalSaved = false;
             boolean officialRestored = false;
+            boolean[] syncAccepted = {false};
             try {
                 if (change == Change.ADD || change == Change.RECONNECT) {
                     if (!isUnlocked()) throw new IllegalStateException("USER_LOCKED");
@@ -553,6 +558,7 @@ public final class MainActivity extends AppCompatActivity {
                             ? BandLiveService.requestManualSync(this)
                             : BandLiveService.requestSync(this);
                     if (!"ACCEPTED".equals(accepted)) throw new IllegalStateException(accepted);
+                    syncAccepted[0] = true;
                     message = manualSync ? "正在连接并立即同步。" : "设备已登记，正在连接。";
                 } else {
                     if (change == Change.REMOVE) {
@@ -583,7 +589,8 @@ public final class MainActivity extends AppCompatActivity {
                     message = hint;
                 }
             }
-            String visible = message;
+            String visible = queuedSyncNotice && syncAccepted[0]
+                    ? "当前同步已排队，睡眠保护解除后继续。" : message;
             boolean followProfile = openProfileAfterRestore(change, officialRestored);
             main.post(() -> {
                 if (isDestroyed()) return;
@@ -641,10 +648,8 @@ public final class MainActivity extends AppCompatActivity {
                 .setTitle("立即同步健康记录？")
                 .setMessage("当前处于睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
                         + "导致睡眠图出现短暂清醒。是否仍要同步？")
-                .setNegativeButton("等待自动同步", (dialog, which) -> {
-                    ownershipStatus.setText("当前同步已排队，睡眠保护解除后继续。");
-                    changeOwnership(Change.RECONNECT);
-                })
+                .setNegativeButton("等待自动同步", (dialog, which) ->
+                        changeOwnership(Change.RECONNECT, false, true))
                 .setPositiveButton("仍然同步", (dialog, which) ->
                         changeOwnership(Change.RECONNECT, true))
                 .show();
