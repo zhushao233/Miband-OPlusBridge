@@ -83,6 +83,7 @@ public final class MainActivity extends AppCompatActivity {
     private BridgeScreen debugPage;
     private BridgeScreen permissionsPage;
     private BridgeScreen appearancePage;
+    private BridgeScreen aboutPage;
     private int currentTabId = R.id.tab_device;
     private boolean secondaryPage;
     private OnBackPressedCallback backCallback;
@@ -169,6 +170,7 @@ public final class MainActivity extends AppCompatActivity {
         debugPage = screen.page();
         permissionsPage = screen.page();
         appearancePage = screen.page();
+        aboutPage = screen.page();
 
         buildDeviceTab();
         buildToolsTab();
@@ -178,6 +180,7 @@ public final class MainActivity extends AppCompatActivity {
         buildDebugPage();
         buildPermissionsPage();
         buildAppearancePage();
+        buildAboutPage();
 
         if (state != null) {
             int restored = state.getInt("currentTab", R.id.tab_device);
@@ -543,6 +546,7 @@ public final class MainActivity extends AppCompatActivity {
         appearanceRow = settingsPage.navRow(appearance, "主题与布局",
                 () -> showSecondaryPage(appearancePage, "主题与布局", this::refreshSettingsRows));
         appearanceRow.setIcon(rowIcon(R.drawable.ic_appearance));
+        appearanceRow.setSummary("自定义更多主题与布局选项");
 
         settingsPage.heading("应用权限");
         LinearLayout permissions = settingsPage.card();
@@ -576,13 +580,17 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout about = settingsPage.card();
         MiuixBasicView guide = settingsPage.navRow(about, "使用说明", this::showSetupGuide);
         guide.setSummary("首次设置与日常使用");
+        MiuixBasicView aboutEntry = settingsPage.navRow(about, "关于",
+                () -> showSecondaryPage(aboutPage, "关于", null));
+        aboutEntry.setSummary("版本 " + BuildConfig.VERSION_NAME);
+        aboutEntry.setIcon(ContextCompat.getDrawable(this, R.mipmap.ic_launcher));
         settingsPage.caption("小米手环桥接 " + BuildConfig.VERSION_NAME + " · by zhushao233");
         refreshSettingsRows();
     }
 
     private void refreshSettingsRows() {
         if (appearanceRow == null) return;
-        appearanceRow.setSummary(UiStyle.summary(this));
+        appearanceRow.setSummary("自定义更多主题与布局选项");
     }
 
     private void confirmRestore() {
@@ -831,6 +839,39 @@ public final class MainActivity extends AppCompatActivity {
             return true;
         });
         appearancePage.caption("修改后立即生效，当前页面保持打开。");
+    }
+
+    // ---- about page ----
+
+    private void buildAboutPage() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(20), dp(20), dp(20), dp(20));
+        header.setBackground(BridgeScreen.roundedRect(
+                color(R.color.accent), dp(24), 0, 0));
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(56), dp(56));
+        iconParams.rightMargin = dp(16);
+        header.addView(icon, iconParams);
+
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+        TextView name = text(20, R.color.on_primary, true);
+        name.setText("小米手环桥接");
+        labels.addView(name);
+        TextView version = text(13, R.color.on_primary, false);
+        version.setText("版本 " + BuildConfig.VERSION_NAME);
+        version.setAlpha(0.82f);
+        LinearLayout.LayoutParams versionParams = new LinearLayout.LayoutParams(-2, -2);
+        versionParams.topMargin = dp(4);
+        labels.addView(version, versionParams);
+        header.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        addWithMargins(aboutPage.body, header, 16, 16, 16, 8);
     }
 
     // ---- lifecycle ----
