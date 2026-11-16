@@ -29,6 +29,7 @@ public final class BandLiveService extends Service {
     private static final String ACTION_SYNC = "io.github.miam1ku.mibandoplusbridge.SYNC";
     private static final String ACTION_REPAIR = "io.github.miam1ku.mibandoplusbridge.REPAIR";
     private static volatile BandLiveService instance;
+    private static volatile boolean pendingManualSync;
     private static volatile io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive deviceLogReceiver;
     private static volatile boolean diagnosticPaused;
     private volatile java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(0);
@@ -38,6 +39,7 @@ public final class BandLiveService extends Service {
     private volatile io.github.miam1ku.mibandoplusbridge.protocol.LiveCommandQueue commands;
     private LiveHistorySync historySync;
     private volatile boolean syncRequested;
+    private volatile boolean manualSyncRequested;
     private volatile boolean realtimeStatsStopPending;
     /** Last sign of life from the supervisor. ColorOS freezing the process, or a dead worker
      *  thread, used to leave the service foreground on 「正在连接手环」 for hours with no retry. */
@@ -329,6 +331,45 @@ public final class BandLiveService extends Service {
             return "ACCEPTED";
         } catch (RuntimeException denied) {
             return "OPEN_CONFIG_REQUIRED";
+        }
+    }
+
+    /** One explicit user sync may bypass the sleep gate; later periodic rounds stay protected. */
+    public static String requestManualSync(Context context) {
+        if (diagnosticPaused) return "OPEN_CONFIG_REQUIRED";
+        if (!context.getSystemService(android.os.UserManager.class).isUserUnlocked()) return "OPEN_CONFIG_REQUIRED";
+        if (!new BandStateRepository(context).isRegistered()) return "DEVICE_NOT_REGISTERED";
+        var ownership = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
+        if (!"NATIVE".equals(ownership.getString("mode", "OFFICIAL"))
+                || !ownership.getBoolean("ownsDisable", false)
+                || ownership.getBoolean("officialRestored", false)) return "NATIVE_OWNERSHIP_REQUIRED";
+        BandLiveService live = instance;
+        if (live != null && !live.stopRequested) {
+            return live.requestManualSyncNow() ? "ACCEPTED" : "OPEN_CONFIG_REQUIRED";
+        }
+        pendingManualSync = true;
+        try {
+            start(context);
+            return "ACCEPTED";
+        } catch (RuntimeException denied) {
+            pendingManualSync = false;
+            return "OPEN_CONFIG_REQUIRED";
+        }
+    }
+
+    private boolean requestManualSyncNow() {
+        manualSyncRequested = true;
+        syncRequested = true;
+        healthCollectionStatus("HISTORY_SYNC_QUEUED");
+        synchronized (stopLock) {
+            retryNow = true;
+            stopLock.notifyAll();
+        }
+        try {
+            coordinator.execute(this::tick);
+            return true;
+        } catch (java.util.concurrent.RejectedExecutionException stopping) {
+            return false;
         }
     }
 
@@ -855,6 +896,10 @@ public final class BandLiveService extends Service {
             stopLock.notifyAll();
         }
         if (intent != null && ACTION_SYNC.equals(intent.getAction())) syncRequested = true;
+        if (pendingManualSync) {
+            pendingManualSync = false;
+            requestManualSyncNow();
+        }
         if (intent != null && ACTION_REPAIR.equals(intent.getAction())) {
             // The user tapped 「重新配对」, so one more pairing request is expected on the wrist.
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, "bond repair manual");
@@ -1262,12 +1307,12 @@ public final class BandLiveService extends Service {
         return window && !wakeEvidence;
     }
 
-    private static boolean isSleepSuppressionWindow(int hour) {
+    public static boolean isSleepProtectionWindow(int hour) {
         return hour >= NIGHT_START_HOUR || hour < NIGHT_HARD_END_HOUR;
     }
 
     private static boolean isSleepSuppressionWindow() {
-        return isSleepSuppressionWindow(java.time.LocalTime.now().getHour());
+        return isSleepProtectionWindow(java.time.LocalTime.now().getHour());
     }
 
     static boolean shouldPollSleepState(int hour, boolean nightTrackingEnabled) {
@@ -1654,14 +1699,16 @@ public final class BandLiveService extends Service {
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                     "HISTORY_SYNC sleep-state timeout, checking pending history");
         }
-        // Pending work may become eligible on timeout or when the suppression window ends.
-        flushPendingHistory();
-        if (syncRequested || now >= nextHealthAt) {
-            boolean historical = syncRequested && !isNightWindow();
+        if (syncRequested || manualSyncRequested || now >= nextHealthAt) {
+            boolean manualOverride = manualSyncRequested;
+            boolean historical = manualOverride || (syncRequested && !isNightWindow());
             syncRequested = false;
+            manualSyncRequested = false;
             nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes());
-            requestHistoryWhenAwake(historical);
+            requestHistoryWhenAwake(historical, manualOverride);
         }
+        // Pending work may become eligible on timeout or when the suppression window ends.
+        flushPendingHistory(false);
         if (now >= nextWeatherAt) {
             nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
             weatherSync.sendIfChanged();
@@ -2060,24 +2107,32 @@ public final class BandLiveService extends Service {
                 waitingForInitialSleepState, quiet, cooldown, stale);
     }
 
-    private void requestHistoryWhenAwake(boolean historical) {
+    private void requestHistoryWhenAwake(boolean historical, boolean manualOverride) {
         pendingHistoryIncludesHistory |= historical && !isNightWindow();
+        if (manualOverride) pendingHistoryIncludesHistory = true;
         historySyncPending = true;
-        if (!historyMayRun()) {
+        if (!manualOverride && !historyMayRun()) {
+            healthCollectionStatus("HISTORY_SYNC_QUEUED");
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                     "HISTORY_SYNC deferred asleep=" + bandAsleep
                             + " waiting=" + waitingForInitialSleepState
                             + " quiet=" + (sleepStateUnsupported && nightQuietObserved()));
             return;
         }
-        flushPendingHistory();
+        flushPendingHistory(manualOverride);
     }
 
     private void flushPendingHistory() {
-        if (!historySyncPending || !historyMayRun() || historySync == null) return;
-        boolean historical = pendingHistoryIncludesHistory && !isNightWindow();
+        flushPendingHistory(false);
+    }
+
+    private void flushPendingHistory(boolean manualOverride) {
+        if (!historyShouldFlush(historySyncPending, manualOverride, historyMayRun())
+                || historySync == null) return;
+        boolean historical = pendingHistoryIncludesHistory && (manualOverride || !isNightWindow());
         historySyncPending = false;
         pendingHistoryIncludesHistory = false;
+        healthCollectionStatus("HISTORY_SYNCING");
         historySync.request(historical);
         if (isNightWindow()) {
             nightHadQuiet |= nightQuietObserved();
@@ -2090,6 +2145,10 @@ public final class BandLiveService extends Service {
             nextWeatherAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
             weatherSync.refreshAndSend();
         }
+    }
+
+    static boolean historyShouldFlush(boolean pending, boolean manualOverride, boolean mayRun) {
+        return pending && (manualOverride || mayRun);
     }
 
     private void requestSleepState() {

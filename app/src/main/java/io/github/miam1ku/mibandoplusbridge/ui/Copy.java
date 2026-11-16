@@ -120,6 +120,8 @@ public final class Copy {
             case "HISTORY_FILE_REJECTED" -> "一份健康文件需要重新获取，下次同步时自动完成。";
             case "HISTORY_STORAGE_FAILED", "HEALTH_STORAGE_UNAVAILABLE" -> "清理一些存储空间后，健康同步会继续。";
             case "HEALTH_REPLAY_PAUSED", "HISTORY_CONFIRMATION_PENDING" -> "健康同步稍后继续，已保存的记录都在。";
+            case "HISTORY_SYNC_QUEUED" -> "同步已排队，会在确认清醒后继续。";
+            case "HISTORY_SYNCING" -> "正在同步健康记录。";
             default -> "";
         };
     }

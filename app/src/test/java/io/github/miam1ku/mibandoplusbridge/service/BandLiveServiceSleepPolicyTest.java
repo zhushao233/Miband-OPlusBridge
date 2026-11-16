@@ -103,6 +103,21 @@ public final class BandLiveServiceSleepPolicyTest {
         assertFalse(BandLiveService.nightStillSuppressed(15, false));
     }
 
+    @Test public void manualSyncBypassesSleepGateForOneRound() {
+        assertFalse(BandLiveService.historyShouldFlush(true, false, false));
+        assertTrue(BandLiveService.historyShouldFlush(true, true, false));
+        assertFalse(BandLiveService.historyShouldFlush(false, true, false));
+        assertTrue(BandLiveService.historyShouldFlush(true, false, true));
+    }
+
+    @Test public void sleepProtectionWindowEndsAtFourteen() {
+        assertTrue(BandLiveService.isSleepProtectionWindow(22));
+        assertTrue(BandLiveService.isSleepProtectionWindow(0));
+        assertTrue(BandLiveService.isSleepProtectionWindow(13));
+        assertFalse(BandLiveService.isSleepProtectionWindow(14));
+        assertFalse(BandLiveService.isSleepProtectionWindow(21));
+    }
+
     @Test public void stepRefreshMustBeatTheStaleThreshold() {
         assertTrue(BandLiveService.nightStatsRefreshMinutes()
                 < BandLiveService.quietSampleMaxAgeMinutes());

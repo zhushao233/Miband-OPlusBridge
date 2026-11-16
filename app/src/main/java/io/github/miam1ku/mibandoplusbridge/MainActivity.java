@@ -511,6 +511,10 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void changeOwnership(Change change) {
+        changeOwnership(change, false);
+    }
+
+    private void changeOwnership(Change change, boolean manualSync) {
         if (worker.isShutdown() || changingOwnership) return;
         if (!rootGranted) {
             requestRoot();
@@ -522,7 +526,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         changingOwnership = true;
         updateControls();
-        ownershipStatus.setText("正在处理，请稍候…");
+        ownershipStatus.setText(manualSync ? "正在连接并立即同步…" : "正在处理，请稍候…");
         worker.execute(() -> {
             OwnershipController owner = new OwnershipController(this);
             BandStateRepository repository = new BandStateRepository(this);
@@ -545,8 +549,11 @@ public final class MainActivity extends AppCompatActivity {
                         throw new IllegalStateException("NATIVE_OWNERSHIP_REQUIRED");
                     }
                     BandLiveService.start(this);
-                    BandLiveService.requestSync(this);
-                    message = "设备已登记，正在连接。";
+                    String accepted = manualSync
+                            ? BandLiveService.requestManualSync(this)
+                            : BandLiveService.requestSync(this);
+                    if (!"ACCEPTED".equals(accepted)) throw new IllegalStateException(accepted);
+                    message = manualSync ? "正在连接并立即同步。" : "设备已登记，正在连接。";
                 } else {
                     if (change == Change.REMOVE) {
                         repository.unregisterDevice();
@@ -613,7 +620,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (change == Change.RECONNECT) {
-            changeOwnership(change);
+            confirmManualSync();
             return;
         }
         new MaterialAlertDialogBuilder(this)
@@ -622,6 +629,24 @@ public final class MainActivity extends AppCompatActivity {
                         + "绑定和健康历史都会保留。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("添加并接管", (dialog, which) -> changeOwnership(change))
+                .show();
+    }
+
+    private void confirmManualSync() {
+        if (!BandLiveService.isSleepProtectionWindow(java.time.LocalTime.now().getHour())) {
+            changeOwnership(Change.RECONNECT, true);
+            return;
+        }
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("立即同步健康记录？")
+                .setMessage("当前处于睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
+                        + "导致睡眠图出现短暂清醒。是否仍要同步？")
+                .setNegativeButton("等待自动同步", (dialog, which) -> {
+                    ownershipStatus.setText("同步已排队，确认清醒后自动继续。");
+                    changeOwnership(Change.RECONNECT);
+                })
+                .setPositiveButton("仍然同步", (dialog, which) ->
+                        changeOwnership(Change.RECONNECT, true))
                 .show();
     }
 
