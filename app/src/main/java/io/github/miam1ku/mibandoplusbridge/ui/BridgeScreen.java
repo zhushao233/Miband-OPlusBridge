@@ -37,6 +37,7 @@ import com.hchen.himiuix.fill.MiuixFillView;
 import com.hchen.himiuix.helper.WindowInsetsHelper;
 import com.hchen.himiuix.widget.MiuixTextView;
 import com.google.android.material.materialswitch.MaterialSwitch;
+import com.itos.coui.host.CouiTabBarView;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -63,7 +64,7 @@ public final class BridgeScreen {
     private final AppCompatActivity activity;
     private final MiuixAppBar appBar;
     private final NestedScrollView scroll;
-    private final PiliTabBar tabBar;
+    private final CouiTabBarView tabBar;
     private final View tabBarContainer;
     private final MiuixFillView pageHost;
     private final FrameLayout pageFrame;
@@ -81,7 +82,7 @@ public final class BridgeScreen {
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body, MiuixAppBar appBar,
                          NestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
-                         PiliTabBar tabBar, View tabBarContainer) {
+                         CouiTabBarView tabBar, View tabBarContainer) {
         this.activity = activity;
         this.body = body;
         this.appBar = appBar;
@@ -174,15 +175,13 @@ public final class BridgeScreen {
 
         contentRoot.addView(appBar, new FrameLayout.LayoutParams(-1, -1));
 
-        boolean floating = UiStyle.floating(activity);
-        PiliTabBar tabBar = new PiliTabBar(
-                activity, menuRes, checkedItemId, floating, contentRoot);
+        CouiTabBarView tabBar = new CouiTabBarView(activity, contentRoot);
+        tabBar.setMenu(menuRes, checkedItemId);
         tabBar.setOnTabSelectedListener(itemId -> {
             if (listener != null) listener.onTabSelected(itemId);
         });
 
-        View tabBarContainer = tabBarContainer(activity, tabBar, floating, contentRoot);
-        shell.addView(tabBarContainer, tabBarContainerParams(activity, floating));
+        shell.addView(tabBar, new FrameLayout.LayoutParams(-1, -1));
 
         activity.setContentView(shell);
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
@@ -190,31 +189,12 @@ public final class BridgeScreen {
             pageHost.setPadding(bars.left, topInset, bars.right, dp(activity, 104) + bars.bottom);
             return insets;
         });
-        ViewCompat.setOnApplyWindowInsetsListener(tabBarContainer, (view, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            FrameLayout.LayoutParams params =
-                    (FrameLayout.LayoutParams) view.getLayoutParams();
-            if (floating) {
-                params.leftMargin = dp(activity, 24) + bars.left;
-                params.rightMargin = dp(activity, 24) + bars.right;
-                params.bottomMargin = dp(activity, 12) + bars.bottom;
-                view.setPadding(0, 0, 0, 0);
-            } else {
-                params.leftMargin = 0;
-                params.rightMargin = 0;
-                params.bottomMargin = 0;
-                params.height = dp(activity, 64) + bars.bottom;
-                view.setPadding(bars.left, 0, bars.right, 0);
-            }
-            view.setLayoutParams(params);
-            return insets;
-        });
         appBar.post(() -> {
             appBar.targetStart(scroll);
             appBar.targetRegister(scroll);
         });
         return new BridgeScreen(activity, pageHost, appBar, scroll, pageHost, pageFrame,
-                tabBar, tabBarContainer);
+                tabBar, tabBar);
     }
 
     /** Adds a page below the main shell and returns helpers bound to that page. */
@@ -532,34 +512,6 @@ public final class BridgeScreen {
     private void clearPredictivePages() {
         predictiveSource = null;
         predictiveTarget = null;
-    }
-
-    private static View tabBarContainer(AppCompatActivity activity, PiliTabBar tabBar,
-                                        boolean floating, View backdropSource) {
-        LiquidGlassContainer frame = new LiquidGlassContainer(
-                activity, backdropSource, floating, floating && UiStyle.glass(activity));
-        tabBar.setDockHost(frame);
-        if (floating) {
-            frame.setElevation(dp(activity, UiStyle.glass(activity) ? 12 : 7));
-            frame.addView(tabBar, new FrameLayout.LayoutParams(-1, dp(activity, 64)));
-        } else {
-            frame.setElevation(0);
-            frame.addView(tabBar, new FrameLayout.LayoutParams(-1, dp(activity, 64)));
-        }
-        return frame;
-    }
-
-    private static FrameLayout.LayoutParams tabBarContainerParams(
-            AppCompatActivity activity, boolean floating) {
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                -1, floating ? -2 : dp(activity, 64));
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        if (floating) {
-            params.leftMargin = dp(activity, 24);
-            params.rightMargin = dp(activity, 24);
-            params.bottomMargin = dp(activity, 12);
-        }
-        return params;
     }
 
     private static void configureEdgeToEdge(AppCompatActivity activity) {

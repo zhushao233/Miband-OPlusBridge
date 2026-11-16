@@ -5,8 +5,8 @@ plugins {
 
 android {
     namespace 'io.github.miam1ku.mibandoplusbridge'
-    compileSdk 36
-    buildToolsVersion '35.0.0'
+    compileSdk 37
+    buildToolsVersion '37.0.0'
     defaultConfig {
         applicationId 'io.github.miam1ku.mibandoplusbridge'
         minSdk 36
@@ -69,6 +69,7 @@ protobuf {
 dependencies {
     compileOnly 'io.github.libxposed:api:102.0.0'
     implementation project(':HiMiuix')
+    implementation project(':coui-tab')
     implementation 'com.google.protobuf:protobuf-javalite:4.32.0'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.81'
     implementation 'org.apache.commons:commons-compress:1.27.1'

@@ -31,7 +31,7 @@
 
 ## 界面
 
-模块界面使用 [HiMiuix](https://github.com/HChenX/HiMiuix) 的 Miuix 风格组件。主页分为「设备」「工具」「设置」三个 Tab：设备页显示绑定、连接、电量、上次同步和「同步剩余项目」；工具页放设备详情、天气同步与入睡后暂停音乐；设置页放主题与布局、权限与后台、绑定与设备信息、调试与日志、恢复小米运动健康和帮助。设备详情、权限与后台、主题与布局、绑定与设备信息、调试与日志为二级页面。可在「主题与布局」中切换 Miuix / Material 主题和固定 / 悬浮底栏。界面跟随系统深色模式。
+模块界面使用 [HiMiuix](https://github.com/HChenX/HiMiuix) 的 Miuix 风格组件，底部导航使用 [COUI-Kit](https://github.com/ItosEO/COUI-Kit) 的 ColorOS 17「凝光视效」底栏。主页分为「设备」「工具」「设置」三个 Tab：设备页显示绑定、连接、电量、上次同步和「同步剩余项目」；工具页放设备详情、天气同步与入睡后暂停音乐；设置页放主题与布局、权限与后台、绑定与设备信息、调试与日志、恢复小米运动健康和帮助。设备详情、权限与后台、主题与布局、绑定与设备信息、调试与日志为二级页面。可在「主题与布局」中切换 Miuix / Material 主题。界面跟随系统深色模式。
 
 ## 历史步数汇总核对
 
@@ -100,7 +100,7 @@ tag 格式：`{versionCode}-{versionName}`。`workflow_dispatch` 只更新源仓
 - [AstroBox-NG](https://github.com/AstralSightStudios/AstroBox-NG)（AstralSightStudios）
 - [Gadgetbridge](https://gadgetbridge.org/)
 - [HiMiuix](https://github.com/HChenX/HiMiuix)（HChenX，LGPL-2.1）提供模块界面的基础组件和主题样式
-- [AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（Kyant0，Apache-2.0）提供液态玻璃折射与高光材质参考
+- [COUI-Kit](https://github.com/ItosEO/COUI-Kit)（ItosEO，MPL-2.0）提供 ColorOS 17「凝光视效」底栏、背景采样、材质与轮廓光
 
 ## 许可证
 

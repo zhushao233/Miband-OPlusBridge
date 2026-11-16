@@ -4,5 +4,7 @@ Gadgetbridge reference sources retain their upstream copyright and license notic
 See compat/upstream.json for immutable revision and file hashes.
 SPP V2 framing, SPP V1 envelopes, BLE V1 chunks, session cryptography and the protobuf schema are adapted for diagnostics.
 Selection is grounded in observed Xiaomi SPP V2 + WearAuthV2 traffic, plus Gadgetbridge V1/BLE framing.
+The coui module vendors COUI-Kit source under Mozilla Public License 2.0.
+See coui/COUI-LICENSE and coui/COUI-NOTICE for the upstream license and third-party notices.
 Vendor APK, DEX, native libraries and decompiled sources are research inputs only.
 They must not be included in a bridge APK, source distribution, or KernelSU ZIP.

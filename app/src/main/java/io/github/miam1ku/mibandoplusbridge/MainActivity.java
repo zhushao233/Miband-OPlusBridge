@@ -814,34 +814,7 @@ public final class MainActivity extends AppCompatActivity {
                     }
                 });
 
-        LinearLayout dockCard = appearancePage.card();
-        appearancePage.title(dockCard, "底栏布局");
-        appearancePage.caption(dockCard, "固定底栏贴合屏幕边缘，悬浮底栏保留底部间距。");
-        addChoiceGroup(dockCard, new String[]{"固定底栏", "悬浮底栏"},
-                UiStyle.floating(this) ? 1 : 0,
-                index -> {
-                    if (UiStyle.setDock(this, index == 1 ? UiStyle.FLOATING : UiStyle.FIXED)) {
-                        styleSignature = UiStyle.signature(this);
-                        recreate();
-                    } else {
-                        Toast.makeText(this, "底栏设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
-                    }
-                });
-        if (UiStyle.floating(this)) {
-            BridgeScreen.ToggleRow glass = appearancePage.switchRow(dockCard,
-                    "液态玻璃底栏", "实时模糊后方内容并做边缘折射；关闭后使用实色悬浮底栏。");
-            glass.setChecked(UiStyle.glass(this));
-            glass.setOnStateChangeListener(checked -> {
-                if (UiStyle.setGlass(this, checked)) {
-                    styleSignature = UiStyle.signature(this);
-                    recreate();
-                    return true;
-                }
-                Toast.makeText(this, "底栏样式保存中断，再试一次", Toast.LENGTH_SHORT).show();
-                return false;
-            });
-        }
-        appearancePage.caption("主题切换会调整卡片圆角与组件密度；底栏样式会立即应用到三个主页。");
+        appearancePage.caption("底栏固定使用 COUI 的 ColorOS 17「凝光视效」。主题切换会调整卡片圆角与组件密度。");
     }
 
     private interface Choice { void onSelected(int index); }
