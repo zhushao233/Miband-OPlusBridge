@@ -42,7 +42,6 @@ import com.hchen.himiuix.widget.MiuixTextView;
 import com.itos.coui.host.CouiBackButtonView;
 import com.itos.coui.host.CouiSwitchView;
 import com.itos.coui.host.CouiTabBarView;
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -257,22 +256,21 @@ public final class BridgeScreen {
         if (backButton != null) backButton.setContourGlowEnabled(enabled);
     }
 
-    private static ViewGroup appBarOverallView(MiuixAppBar appBar) {
-        try {
-            Field field = MiuixAppBar.class.getDeclaredField("overallView");
-            field.setAccessible(true);
-            return (ViewGroup) field.get(appBar);
-        } catch (ReflectiveOperationException ignored) {
-            return null;
-        }
-    }
-
+    /**
+     * Miuix applies its frosted material on attach and exposes no public blur
+     * switch. Walk the direct children instead of reading the private chrome
+     * field, so a library refactor degrades to a no-op rather than a silent
+     * reflection failure.
+     */
     private static void clearAppBarBlur(MiuixAppBar appBar) {
-        ViewGroup overallView = appBarOverallView(appBar);
-        if (overallView == null) return;
-        MiuiSuperBlur.clearAllBlur(overallView);
-        overallView.setBackgroundColor(appBar.getContext().getColor(
-                com.hchen.himiuix.R.color.miuix_theme_color));
+        int color = appBar.getContext().getColor(
+                com.hchen.himiuix.R.color.miuix_theme_color);
+        for (int i = 0; i < appBar.getChildCount(); i++) {
+            View child = appBar.getChildAt(i);
+            if (child instanceof NestedScrollView) continue;
+            MiuiSuperBlur.clearAllBlur(child);
+            child.setBackgroundColor(color);
+        }
     }
 
     public void setSyncAction(Runnable action) {

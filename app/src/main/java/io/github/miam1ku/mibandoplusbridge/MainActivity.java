@@ -539,60 +539,60 @@ public final class MainActivity extends AppCompatActivity {
     // ---- settings tab ----
 
     private void buildSettingsTab() {
-        settingsPage.heading("外观");
+        settingsPage.heading(Copy.SETTINGS_APPEARANCE);
         LinearLayout appearance = settingsPage.card();
-        appearanceRow = settingsPage.navRow(appearance, "主题与布局",
-                () -> showSecondaryPage(appearancePage, "主题与布局", this::refreshSettingsRows));
+        appearanceRow = settingsPage.navRow(appearance, Copy.SETTINGS_THEME,
+                () -> showSecondaryPage(appearancePage, Copy.SETTINGS_THEME, this::refreshSettingsRows));
         appearanceRow.setIcon(rowIcon(R.drawable.ic_appearance));
-        appearanceRow.setSummary("自定义更多主题与布局选项");
+        appearanceRow.setSummary(Copy.SETTINGS_THEME_SUMMARY);
 
-        settingsPage.heading("应用权限");
+        settingsPage.heading(Copy.SETTINGS_PERMISSIONS);
         LinearLayout permissions = settingsPage.card();
-        permissionRow = settingsPage.navRow(permissions, "权限与后台", () -> {
+        permissionRow = settingsPage.navRow(permissions, Copy.SETTINGS_PERMISSION_ROW, () -> {
             refreshPermissionRows();
-            showSecondaryPage(permissionsPage, "权限与后台", this::refreshPermissionRows);
+            showSecondaryPage(permissionsPage, Copy.SETTINGS_PERMISSION_ROW, this::refreshPermissionRows);
         });
-        permissionRow.setSummary("附近设备、自启动与关联启动");
+        permissionRow.setSummary(Copy.SETTINGS_PERMISSION_SUMMARY);
         permissionRow.setIcon(rowIcon(R.drawable.ic_permissions));
 
-        settingsPage.heading("高级");
+        settingsPage.heading(Copy.SETTINGS_ADVANCED);
         LinearLayout advanced = settingsPage.card();
-        MiuixBasicView binding = settingsPage.navRow(advanced, "绑定与设备信息", () -> {
+        MiuixBasicView binding = settingsPage.navRow(advanced, Copy.SETTINGS_BINDING, () -> {
             refreshBindingStatus();
             refreshBonded();
-            showSecondaryPage(bindingPage, "绑定与设备信息", this::refreshDevice);
+            showSecondaryPage(bindingPage, Copy.SETTINGS_BINDING, this::refreshDevice);
         });
-        binding.setSummary("重新导入、设备选择与管理");
+        binding.setSummary(Copy.SETTINGS_BINDING_SUMMARY);
         binding.setIcon(rowIcon(R.drawable.ic_tab_device));
-        MiuixBasicView debug = settingsPage.navRow(advanced, "调试与日志", () -> {
+        MiuixBasicView debug = settingsPage.navRow(advanced, Copy.SETTINGS_DEBUG, () -> {
             refreshDebugStatus();
-            showSecondaryPage(debugPage, "调试与日志", this::refreshDevice);
+            showSecondaryPage(debugPage, Copy.SETTINGS_DEBUG, this::refreshDevice);
         });
-        debug.setSummary("协议测试、诊断与发送日志");
+        debug.setSummary(Copy.SETTINGS_DEBUG_SUMMARY);
         debug.setIcon(rowIcon(R.drawable.ic_debug));
 
-        settingsPage.heading("帮助与关于");
+        settingsPage.heading(Copy.SETTINGS_HELP);
         LinearLayout about = settingsPage.card();
-        MiuixBasicView guide = settingsPage.navRow(about, "使用说明", this::showSetupGuide);
-        guide.setSummary("首次设置与日常使用");
-        MiuixBasicView aboutEntry = settingsPage.navRow(about, "关于",
-                () -> showSecondaryPage(aboutPage, "关于", null));
-        aboutEntry.setSummary("版本 " + BuildConfig.VERSION_NAME);
+        MiuixBasicView guide = settingsPage.navRow(about, Copy.SETTINGS_GUIDE, this::showSetupGuide);
+        guide.setSummary(Copy.SETTINGS_GUIDE_SUMMARY);
+        MiuixBasicView aboutEntry = settingsPage.navRow(about, Copy.SETTINGS_ABOUT,
+                () -> showSecondaryPage(aboutPage, Copy.SETTINGS_ABOUT, null));
+        aboutEntry.setSummary(Copy.VERSION_PREFIX + BuildConfig.VERSION_NAME);
         aboutEntry.setIcon(ContextCompat.getDrawable(this, R.mipmap.ic_launcher));
         refreshSettingsRows();
     }
 
     private void refreshSettingsRows() {
         if (appearanceRow == null) return;
-        appearanceRow.setSummary("自定义更多主题与布局选项");
+        appearanceRow.setSummary(Copy.SETTINGS_THEME_SUMMARY);
     }
 
     private void confirmRestore() {
         new MaterialAlertDialogBuilder(this)
-                .setTitle("恢复小米运动健康？")
-                .setMessage("桥接会断开连接，把手环交还小米运动健康。绑定和健康历史都会保留。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("恢复", (dialog, which) -> changeOwnership(Change.RESTORE))
+                .setTitle(Copy.RESTORE_MI_HEALTH_CONFIRM)
+                .setMessage(Copy.RESTORE_MI_HEALTH_MESSAGE)
+                .setNegativeButton(Copy.ACTION_CANCEL, null)
+                .setPositiveButton(Copy.ACTION_RESTORE, (dialog, which) -> changeOwnership(Change.RESTORE))
                 .show();
     }
 
@@ -646,24 +646,23 @@ public final class MainActivity extends AppCompatActivity {
 
     private void buildBindingPage() {
         LinearLayout statusCard = bindingPage.card();
-        bindingStatus = bindingPage.bodyText(statusCard, "正在读取绑定信息…");
+        bindingStatus = bindingPage.bodyText(statusCard, Copy.BINDING_STATUS_LOADING);
 
-        bindingPage.heading("设备管理");
+        bindingPage.heading(Copy.DEVICE_MANAGEMENT);
         LinearLayout manage = bindingPage.card();
-        bindingRestore = bindingPage.outlined(manage, "恢复小米运动健康", this::confirmRestore);
-        bindingRemove = bindingPage.dangerOutlined(manage, "从健康移除", () ->
+        bindingRestore = bindingPage.outlined(manage, Copy.RESTORE_MI_HEALTH, this::confirmRestore);
+        bindingRemove = bindingPage.dangerOutlined(manage, Copy.REMOVE_FROM_HEALTH, () ->
                 new MaterialAlertDialogBuilder(this)
-                        .setTitle("从健康移除这只手环？")
-                        .setMessage("桥接会断开连接，把手环交还小米运动健康。健康历史和加密绑定都会保留，之后可随时重新添加。")
-                        .setNegativeButton("取消", null)
-                        .setPositiveButton("移除", (dialog, which) -> changeOwnership(Change.REMOVE))
+                        .setTitle(Copy.REMOVE_FROM_HEALTH_CONFIRM)
+                        .setMessage(Copy.REMOVE_FROM_HEALTH_MESSAGE)
+                        .setNegativeButton(Copy.ACTION_CANCEL, null)
+                        .setPositiveButton(Copy.ACTION_REMOVE, (dialog, which) -> changeOwnership(Change.REMOVE))
                         .show());
-        bindingPage.caption(manage, "绑定和健康历史始终保存在本机。");
+        bindingPage.caption(manage, Copy.BINDING_MANAGEMENT_CAPTION);
 
-        bindingPage.heading("绑定导入");
+        bindingPage.heading(Copy.BINDING_IMPORT_TITLE);
         LinearLayout importCard = bindingPage.card();
-        bindingPage.caption(importCard,
-                "从本机小米运动健康数据库读取密钥；旧式导入窗口用于让官方应用在 120 秒内重新读取绑定。");
+        bindingPage.caption(importCard, Copy.BINDING_IMPORT_CAPTION);
         bonded = new LinearLayout(this);
         bonded.setOrientation(LinearLayout.VERTICAL);
         importCard.addView(bonded, new LinearLayout.LayoutParams(-1, -2));
@@ -671,10 +670,10 @@ public final class MainActivity extends AppCompatActivity {
         if (preselected != null && preselected.matches("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) {
             selectedAddress = preselected;
         }
-        openWindow = bindingPage.filled(importCard, "开启导入窗口（120 秒）", () -> {
+        openWindow = bindingPage.filled(importCard, Copy.BINDING_IMPORT_OPEN, () -> {
             if (!hostSupported) return;
             if (selectedAddress.isBlank()) {
-                bindingStatus.setText("先在上方选择一只已配对设备。");
+                bindingStatus.setText(Copy.BINDING_SELECT_FIRST);
                 return;
             }
             Bundle selected = new Bundle();
@@ -682,10 +681,12 @@ public final class MainActivity extends AppCompatActivity {
             action("openWindow", selected, bindingStatus);
         });
         openWindow.setEnabled(false);
-        bindingPage.outlined(importCard, "从数据库导入", () -> startBindingImport(bindingStatus));
-        bindingPage.textButton(importCard, "关闭导入和采集窗口",
+        bindingPage.outlined(importCard, Copy.BINDING_IMPORT_FROM_DB,
+                () -> startBindingImport(bindingStatus));
+        bindingPage.textButton(importCard, Copy.BINDING_IMPORT_CLOSE,
                 () -> action("closeWindow", null, bindingStatus));
-        bindingPage.navRow(importCard, "打开小米运动健康", () -> launchMiHealth(bindingStatus));
+        bindingPage.navRow(importCard, Copy.BINDING_OPEN_MI_HEALTH,
+                () -> launchMiHealth(bindingStatus));
     }
 
     private void refreshBindingStatus() {
@@ -801,15 +802,14 @@ public final class MainActivity extends AppCompatActivity {
 
     private void buildAppearancePage() {
         LinearLayout effects = appearancePage.card();
-        appearancePage.title(effects, "凝光视效");
-        appearancePage.caption(effects,
-                "控制底栏、返回按钮等 COUI 组件的轮廓高光与内光晕，模糊和投影保持原样。");
-        BridgeScreen.ToggleRow contour = appearancePage.switchRow(effects, "轮廓光",
-                "关闭后保留组件材质，只隐藏描边与内光晕。");
+        appearancePage.title(effects, Copy.EFFECTS_TITLE);
+        appearancePage.caption(effects, Copy.EFFECTS_CAPTION);
+        BridgeScreen.ToggleRow contour = appearancePage.switchRow(effects, Copy.CONTOUR_TITLE,
+                Copy.CONTOUR_CAPTION);
         contour.setChecked(UiStyle.contourGlow(this));
         contour.setOnStateChangeListener(checked -> {
             if (!UiStyle.setContourGlow(this, checked)) {
-                Toast.makeText(this, "轮廓光设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, Copy.CONTOUR_SAVE_INTERRUPTED, Toast.LENGTH_SHORT).show();
                 return false;
             }
             screen.setContourGlowEnabled(checked);
@@ -817,20 +817,20 @@ public final class MainActivity extends AppCompatActivity {
             return true;
         });
         LinearLayout dock = appearancePage.card();
-        appearancePage.title(dock, "底栏");
-        BridgeScreen.ToggleRow sync = appearancePage.switchRow(dock, "显示同步手环按钮",
-                "在底栏右侧显示蓝色线性刷新按钮，按下会显示提示。");
+        appearancePage.title(dock, Copy.DOCK_TITLE);
+        BridgeScreen.ToggleRow sync = appearancePage.switchRow(dock, Copy.SYNC_ACTION_TITLE,
+                Copy.SYNC_ACTION_CAPTION);
         sync.setChecked(UiStyle.syncActionVisible(this));
         sync.setOnStateChangeListener(checked -> {
             if (!UiStyle.setSyncActionVisible(this, checked)) {
-                Toast.makeText(this, "底栏设置保存中断，再试一次", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, Copy.DOCK_SAVE_INTERRUPTED, Toast.LENGTH_SHORT).show();
                 return false;
             }
             screen.setSyncActionVisible(checked);
             refreshSettingsRows();
             return true;
         });
-        appearancePage.caption("修改后立即生效，当前页面保持打开。");
+        appearancePage.caption(Copy.EFFECTS_APPLIED);
     }
 
     // ---- about page ----
@@ -853,10 +853,10 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
         TextView name = text(20, R.color.on_primary, true);
-        name.setText("小米手环桥接");
+        name.setText(Copy.APP_NAME);
         labels.addView(name);
         TextView version = text(13, R.color.on_primary, false);
-        version.setText("版本 " + BuildConfig.VERSION_NAME);
+        version.setText(Copy.VERSION_PREFIX + BuildConfig.VERSION_NAME);
         version.setAlpha(0.82f);
         LinearLayout.LayoutParams versionParams = new LinearLayout.LayoutParams(-2, -2);
         versionParams.topMargin = dp(4);
@@ -973,7 +973,7 @@ public final class MainActivity extends AppCompatActivity {
                 Intent send = new Intent(Intent.ACTION_SEND);
                 send.setType("application/zip");
                 send.putExtra(Intent.EXTRA_STREAM, uri);
-                send.putExtra(Intent.EXTRA_SUBJECT, "小米手环桥接调试日志");
+                send.putExtra(Intent.EXTRA_SUBJECT, Copy.DEBUG_LOG_SUBJECT);
                 send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 Intent qq = new Intent(send);
                 qq.setPackage("com.tencent.mobileqq");
@@ -1077,7 +1077,7 @@ public final class MainActivity extends AppCompatActivity {
             } catch (Exception failure) {
                 message = repository.isRegistered()
                         ? "设备登记已保留。点「同步剩余项目」再连接一次，或恢复官方管理。"
-                        : "点「恢复小米运动健康」再试一次。";
+                        : Copy.RESTORE_MI_HEALTH_RETRY;
             }
             String idle = message;
             main.post(() -> {

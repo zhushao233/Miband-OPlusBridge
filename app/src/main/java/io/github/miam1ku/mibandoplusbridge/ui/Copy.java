@@ -2,11 +2,71 @@
 package io.github.miam1ku.mibandoplusbridge.ui;
 
 /**
- * Every user-facing sentence that depends on a status code.
+ * User-facing copy shared by the module UI.
  * Style: say what the state is, then what to tap next. {@code CopyStyleTest} checks the wording.
  */
 public final class Copy {
     private Copy() {}
+
+    // ---- settings and device management ----
+
+    public static final String APP_NAME = "小米手环桥接";
+    public static final String VERSION_PREFIX = "版本 ";
+    public static final String DEBUG_LOG_SUBJECT = "小米手环桥接调试日志";
+
+    public static final String SETTINGS_APPEARANCE = "外观";
+    public static final String SETTINGS_THEME = "主题与布局";
+    public static final String SETTINGS_THEME_SUMMARY = "自定义更多主题与布局选项";
+    public static final String SETTINGS_PERMISSIONS = "应用权限";
+    public static final String SETTINGS_PERMISSION_ROW = "权限与后台";
+    public static final String SETTINGS_PERMISSION_SUMMARY = "附近设备、自启动与关联启动";
+    public static final String SETTINGS_ADVANCED = "高级";
+    public static final String SETTINGS_BINDING = "绑定与设备信息";
+    public static final String SETTINGS_BINDING_SUMMARY = "重新导入、设备选择与管理";
+    public static final String SETTINGS_DEBUG = "调试与日志";
+    public static final String SETTINGS_DEBUG_SUMMARY = "协议测试、诊断与发送日志";
+    public static final String SETTINGS_HELP = "帮助与关于";
+    public static final String SETTINGS_GUIDE = "使用说明";
+    public static final String SETTINGS_GUIDE_SUMMARY = "首次设置与日常使用";
+    public static final String SETTINGS_ABOUT = "关于";
+
+    public static final String EFFECTS_TITLE = "凝光视效";
+    public static final String EFFECTS_CAPTION =
+            "控制底栏、返回按钮等 COUI 组件的轮廓高光与内光晕，模糊和投影保持原样。";
+    public static final String CONTOUR_TITLE = "轮廓光";
+    public static final String CONTOUR_CAPTION = "关闭后保留组件材质，只隐藏描边与内光晕。";
+    public static final String CONTOUR_SAVE_INTERRUPTED = "轮廓光设置保存中断，再试一次";
+    public static final String DOCK_TITLE = "底栏";
+    public static final String SYNC_ACTION_TITLE = "显示同步手环按钮";
+    public static final String SYNC_ACTION_CAPTION = "在底栏右侧显示蓝色线性刷新按钮，按下会显示提示。";
+    public static final String DOCK_SAVE_INTERRUPTED = "底栏设置保存中断，再试一次";
+    public static final String EFFECTS_APPLIED = "修改后立即生效，当前页面保持打开。";
+
+    public static final String DEVICE_MANAGEMENT = "设备管理";
+    public static final String RESTORE_MI_HEALTH = "恢复小米运动健康";
+    public static final String RESTORE_MI_HEALTH_CONFIRM = "恢复小米运动健康？";
+    public static final String RESTORE_MI_HEALTH_MESSAGE =
+            "桥接会断开连接，把手环交还小米运动健康。绑定和健康历史都会保留。";
+    public static final String RESTORE_MI_HEALTH_RETRY = "点「恢复小米运动健康」再试一次。";
+    public static final String REMOVE_FROM_HEALTH = "从健康移除";
+    public static final String REMOVE_FROM_HEALTH_CONFIRM = "从健康移除这只手环？";
+    public static final String REMOVE_FROM_HEALTH_MESSAGE =
+            "桥接会断开连接，把手环交还小米运动健康。健康历史和加密绑定都会保留，之后可随时重新添加。";
+    public static final String BINDING_MANAGEMENT_CAPTION = "绑定和健康历史始终保存在本机。";
+
+    public static final String BINDING_STATUS_LOADING = "正在读取绑定信息…";
+    public static final String BINDING_IMPORT_TITLE = "绑定导入";
+    public static final String BINDING_IMPORT_CAPTION =
+            "从本机小米运动健康数据库读取密钥；旧式导入窗口用于让官方应用在 120 秒内重新读取绑定。";
+    public static final String BINDING_IMPORT_OPEN = "开启导入窗口（120 秒）";
+    public static final String BINDING_IMPORT_FROM_DB = "从数据库导入";
+    public static final String BINDING_IMPORT_CLOSE = "关闭导入和采集窗口";
+    public static final String BINDING_OPEN_MI_HEALTH = "打开小米运动健康";
+    public static final String BINDING_SELECT_FIRST = "先在上方选择一只已配对设备。";
+
+    public static final String ACTION_CANCEL = "取消";
+    public static final String ACTION_RESTORE = "恢复";
+    public static final String ACTION_REMOVE = "移除";
 
     // ---- setup ----
 
