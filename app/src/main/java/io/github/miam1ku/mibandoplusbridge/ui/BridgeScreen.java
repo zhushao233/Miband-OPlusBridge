@@ -37,10 +37,12 @@ import com.hchen.himiuix.MiuixBasicView;
 import com.hchen.himiuix.MiuixViewGroup;
 import com.hchen.himiuix.fill.MiuixFillView;
 import com.hchen.himiuix.helper.WindowInsetsHelper;
+import com.hchen.himiuix.utils.MiuiSuperBlur;
 import com.hchen.himiuix.widget.MiuixTextView;
 import com.itos.coui.host.CouiBackButtonView;
 import com.itos.coui.host.CouiSwitchView;
 import com.itos.coui.host.CouiTabBarView;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -136,8 +138,10 @@ public final class BridgeScreen {
             appBar.targetStart(scroll);
             appBar.targetRegister(scroll);
         });
-        return new BridgeScreen(activity, body, appBar, scroll, null, null, null, null,
-                backButton);
+        BridgeScreen screen = new BridgeScreen(activity, body, appBar, scroll, null, null, null,
+                null, backButton);
+        appBar.post(() -> clearAppBarBlur(appBar));
+        return screen;
     }
 
     /**
@@ -195,6 +199,7 @@ public final class BridgeScreen {
         activity.setContentView(shell);
         BridgeScreen screen = new BridgeScreen(activity, pageHost, appBar, scroll, pageHost,
                 pageFrame, tabBar, tabBar, backButton);
+        appBar.post(() -> clearAppBarBlur(appBar));
         screen.bottomClearance = dp(activity, 104);
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -250,6 +255,24 @@ public final class BridgeScreen {
     public void setContourGlowEnabled(boolean enabled) {
         if (tabBar != null) tabBar.setContourGlowEnabled(enabled);
         if (backButton != null) backButton.setContourGlowEnabled(enabled);
+    }
+
+    private static ViewGroup appBarOverallView(MiuixAppBar appBar) {
+        try {
+            Field field = MiuixAppBar.class.getDeclaredField("overallView");
+            field.setAccessible(true);
+            return (ViewGroup) field.get(appBar);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static void clearAppBarBlur(MiuixAppBar appBar) {
+        ViewGroup overallView = appBarOverallView(appBar);
+        if (overallView == null) return;
+        MiuiSuperBlur.clearAllBlur(overallView);
+        overallView.setBackgroundColor(appBar.getContext().getColor(
+                com.hchen.himiuix.R.color.miuix_theme_color));
     }
 
     public void setSyncAction(Runnable action) {

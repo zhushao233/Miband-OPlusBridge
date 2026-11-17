@@ -515,7 +515,6 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout habit = toolsPage.card();
         if (BandLiveService.sleepStateUnsupportedForCurrentDevice(this)) {
             toolsPage.bodyText(habit, "当前手环会在下次同步时更新睡眠状态。");
-            toolsPage.caption("工具只承载入口与习惯设置；连接、同步和绑定状态以「设备」页为准。");
             return;
         }
         sleepPause = toolsPage.switchRow(habit, "入睡后暂停音乐",
@@ -529,7 +528,6 @@ public final class MainActivity extends AppCompatActivity {
             showStatus("开关状态保存中断，再拨一次即可。");
             return false;
         });
-        toolsPage.caption("工具只承载入口与习惯设置；连接、同步和绑定状态以「设备」页为准。");
     }
 
     private void refreshTools() {
@@ -572,9 +570,6 @@ public final class MainActivity extends AppCompatActivity {
         });
         debug.setSummary("协议测试、诊断与发送日志");
         debug.setIcon(rowIcon(R.drawable.ic_debug));
-        MiuixBasicView restore = settingsPage.navRow(advanced, "恢复小米运动健康", this::confirmRestore);
-        restore.setSummary("交接连接，保留本机历史");
-        restore.setTip("需确认");
 
         settingsPage.heading("帮助与关于");
         LinearLayout about = settingsPage.card();
@@ -584,7 +579,6 @@ public final class MainActivity extends AppCompatActivity {
                 () -> showSecondaryPage(aboutPage, "关于", null));
         aboutEntry.setSummary("版本 " + BuildConfig.VERSION_NAME);
         aboutEntry.setIcon(ContextCompat.getDrawable(this, R.mipmap.ic_launcher));
-        settingsPage.caption("小米手环桥接 " + BuildConfig.VERSION_NAME + " · by zhushao233");
         refreshSettingsRows();
     }
 
@@ -654,6 +648,18 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout statusCard = bindingPage.card();
         bindingStatus = bindingPage.bodyText(statusCard, "正在读取绑定信息…");
 
+        bindingPage.heading("设备管理");
+        LinearLayout manage = bindingPage.card();
+        bindingRestore = bindingPage.outlined(manage, "恢复小米运动健康", this::confirmRestore);
+        bindingRemove = bindingPage.dangerOutlined(manage, "从健康移除", () ->
+                new MaterialAlertDialogBuilder(this)
+                        .setTitle("从健康移除这只手环？")
+                        .setMessage("桥接会断开连接，把手环交还小米运动健康。健康历史和加密绑定都会保留，之后可随时重新添加。")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("移除", (dialog, which) -> changeOwnership(Change.REMOVE))
+                        .show());
+        bindingPage.caption(manage, "绑定和健康历史始终保存在本机。");
+
         bindingPage.heading("绑定导入");
         LinearLayout importCard = bindingPage.card();
         bindingPage.caption(importCard,
@@ -680,19 +686,6 @@ public final class MainActivity extends AppCompatActivity {
         bindingPage.textButton(importCard, "关闭导入和采集窗口",
                 () -> action("closeWindow", null, bindingStatus));
         bindingPage.navRow(importCard, "打开小米运动健康", () -> launchMiHealth(bindingStatus));
-        bindingRestore = bindingPage.outlined(importCard, "恢复官方管理",
-                () -> changeOwnership(Change.RESTORE));
-
-        bindingPage.heading("设备管理");
-        LinearLayout manage = bindingPage.card();
-        bindingRemove = bindingPage.dangerOutlined(manage, "从健康移除", () ->
-                new MaterialAlertDialogBuilder(this)
-                        .setTitle("从健康移除这只手环？")
-                        .setMessage("桥接会断开连接，把手环交还小米运动健康。健康历史和加密绑定都会保留，之后可随时重新添加。")
-                        .setNegativeButton("取消", null)
-                        .setPositiveButton("移除", (dialog, which) -> changeOwnership(Change.REMOVE))
-                        .show());
-        bindingPage.caption(manage, "绑定和健康历史始终保存在本机。");
     }
 
     private void refreshBindingStatus() {
@@ -823,7 +816,6 @@ public final class MainActivity extends AppCompatActivity {
             refreshSettingsRows();
             return true;
         });
-
         LinearLayout dock = appearancePage.card();
         appearancePage.title(dock, "底栏");
         BridgeScreen.ToggleRow sync = appearancePage.switchRow(dock, "显示同步手环按钮",
