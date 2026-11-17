@@ -34,6 +34,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.OplusBand"
+        android:enableOnBackInvokedCallback="true"
         android:forceQueryable="true"
         android:supportsRtl="true" android:usesCleartextTraffic="false">
         <activity android:name=".MainActivity" android:exported="true">
@@ -61,6 +62,10 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity-alias android:name=".integration.BandDetailsInternalActivity"
+            android:targetActivity=".integration.BandDetailsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.OplusBand" />
         <service android:name=".service.BandLiveService" android:exported="false"
             android:foregroundServiceType="connectedDevice" android:stopWithTask="false" />
         <service android:name=".service.BandTileService" android:exported="true"

@@ -14,7 +14,6 @@ import android.view.KeyEvent;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
-import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
@@ -45,9 +44,9 @@ public final class DeviceLogActivity extends AppCompatActivity {
     private TextView deviceChip;
     private TextView deviceDetail;
     private TextView status;
-    private MaterialButton pull;
-    private MaterialButton reconnect;
-    private MaterialButton share;
+    private BridgeScreen.ActionRow pull;
+    private BridgeScreen.ActionRow reconnect;
+    private BridgeScreen.ActionRow share;
     private android.app.Dialog progressDialog;
     private LinearProgressIndicator progressBar;
     private TextView progressStatus;
@@ -410,7 +409,7 @@ public final class DeviceLogActivity extends AppCompatActivity {
             case "DEVICE_LOG_NO_DATA" -> "手环暂无可导出的日志。稍后再试一次。";
             case "DEVICE_LOG_DEVICE_BUSY" -> "手环正在准备日志，请稍后再试。";
             case "DEVICE_LOG_DEVICE_REJECTED" -> "手环暂缓了日志导出请求。稍后再试一次。";
-            case "DEVICE_LOG_DIRECT_UPLOAD_UNSUPPORTED" -> "此固件使用直传模式，可先用「发送调试日志」。";
+            case "DEVICE_LOG_DIRECT_UPLOAD_UNSUPPORTED" -> "此固件使用直传模式，可先用「发送桥接调试日志」。";
             case "DEVICE_LOG_RECEIVE_FAILED", "MASS_RECEIVE_CANCELLED" ->
                     "接收中途停止。确认手环保持连接后再试一次。";
             case "LIVE_SESSION_REQUIRED", "DEVICE_LOG_SESSION_UNAVAILABLE" ->

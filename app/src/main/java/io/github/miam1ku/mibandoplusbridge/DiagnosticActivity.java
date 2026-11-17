@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.Log;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
@@ -19,9 +18,9 @@ import java.util.concurrent.Executors;
 public final class DiagnosticActivity extends AppCompatActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private TextView status;
-    private Button start;
-    private Button live;
-    private Button permission;
+    private BridgeScreen.ActionRow start;
+    private BridgeScreen.ActionRow live;
+    private BridgeScreen.ActionRow permission;
     private volatile SppDiagnosticClient client;
     private boolean running;
 
@@ -44,7 +43,7 @@ public final class DiagnosticActivity extends AppCompatActivity {
                 io.github.miam1ku.mibandoplusbridge.service.BandLiveService.start(this);
                 message = "正在连接，鉴权完成后显示已连接。";
             } catch (RuntimeException unavailable) {
-                message = "回首页添加设备并授权附近设备，再回来点这里。";
+                message = "回「设备」页添加设备并授权附近设备，再回来点这里。";
             }
             String visible = message;
             runOnUiThread(() -> { if (!isDestroyed()) status.setText(visible); });
@@ -118,7 +117,7 @@ public final class DiagnosticActivity extends AppCompatActivity {
             try {
                 io.github.miam1ku.mibandoplusbridge.service.BandLiveService.resumeAfterDiagnostic(this);
             } catch (RuntimeException unavailable) {
-                message += "\n登记已保留，回首页点「立即同步」恢复连接。";
+                message += "\n登记已保留，回「设备」页点「同步剩余项目」恢复连接。";
             }
             String finalMessage = message;
             runOnUiThread(() -> {

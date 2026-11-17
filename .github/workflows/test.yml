@@ -16,10 +16,12 @@ jobs:
       TZ: ${{ matrix.tz }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
       - name: Install Android SDK packages
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -27,7 +29,7 @@ jobs:
             SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0"
+          "$SDKMANAGER" --install "platforms;android-37.0" "build-tools;37.0.0"
       - name: Upstream reuse targets
         run: python3 scripts/check_upstream.py
       - name: Unit tests

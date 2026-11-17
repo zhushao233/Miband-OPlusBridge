@@ -11,26 +11,32 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
 import android.provider.Settings;
+import android.view.Gravity;
 import android.view.View;
-import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
+import androidx.activity.BackEventCompat;
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.google.android.material.materialswitch.MaterialSwitch;
+import com.hchen.himiuix.MiuixBasicView;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
 import io.github.miam1ku.mibandoplusbridge.data.HealthRecordStore;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
 import io.github.miam1ku.mibandoplusbridge.data.TransportObservation;
-import io.github.miam1ku.mibandoplusbridge.integration.BandDetailsActivity;
 import io.github.miam1ku.mibandoplusbridge.integration.CredentialProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.DeviceCardProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
@@ -40,60 +46,89 @@ import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen;
+import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.PageTransition;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.StepState;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.Tone;
 import io.github.miam1ku.mibandoplusbridge.ui.Copy;
 import io.github.miam1ku.mibandoplusbridge.ui.SetupProgress;
+import io.github.miam1ku.mibandoplusbridge.ui.UiStyle;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 /**
- * Home screen. Reads top to bottom: band status with one primary action, first-run checklist,
- * things to fix now, features, help, management, advanced import and debug tools.
- * Device registration stays independent of connection ownership.
+ * Three-tab module home. Device keeps binding and connection state, Tools keeps shortcuts and
+ * habits, Settings keeps preferences and secondary advanced pages. No foreground service status
+ * is rendered on the home surface.
  */
 public final class MainActivity extends AppCompatActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private static final int BLUETOOTH_PERMISSION = 1;
     private static final int CALL_PERMISSIONS = 2;
+
     enum Change { ADD, RECONNECT, REMOVE, RESTORE }
 
     private BridgeScreen screen;
-    // status card
+    private BridgeScreen devicePage;
+    private BridgeScreen toolsPage;
+    private BridgeScreen settingsPage;
+    private BridgeScreen setupPage;
+    private BridgeScreen bindingPage;
+    private BridgeScreen debugPage;
+    private BridgeScreen permissionsPage;
+    private BridgeScreen appearancePage;
+    private BridgeScreen aboutPage;
+    private int currentTabId = R.id.tab_device;
+    private boolean secondaryPage;
+    private OnBackPressedCallback backCallback;
+
+    private final List<View> boundViews = new ArrayList<>();
+    private final List<View> unboundViews = new ArrayList<>();
+
     private TextView deviceName;
-    private TextView statusChip;
-    private TextView connectionHint;
-    private TextView metricsLine;
-    private TextView healthLine;
-    private TextView ownershipStatus;
-    private Button homePrimary;
-    // setup card
-    private LinearLayout setupCard;
+    private TextView connectionStatus;
+    private TextView deviceSub;
+    private TextView batteryValue;
+    private TextView lastSyncValue;
+    private TextView unboundTitle;
+    private TextView unboundSub;
+    private TextView unboundCta;
+    private BridgeScreen.ActionRow syncButton;
+    private TextView statusNoticeText;
+    private TextView unboundStatusText;
+
     private TextView setupTitle;
     private TextView stepRoot;
     private TextView stepImport;
     private TextView stepAdd;
     private TextView primaryHint;
-    private Button openKsu;
-    // notices
+    private BridgeScreen.ActionRow setupPrimary;
+    private BridgeScreen.ActionRow openKsu;
+
     private LinearLayout nearbyNotice;
     private LinearLayout notifyNotice;
     private LinearLayout healthAccessNotice;
-    // management
-    private TextView manageHeading;
-    private LinearLayout manageCard;
-    private Button remove;
-    private Button restore;
-    // advanced
+
+    private BridgeScreen.ToggleRow sleepPause;
+    private MiuixBasicView deviceDetailRow;
+    private MiuixBasicView appearanceRow;
+    private MiuixBasicView permissionRow;
+
     private LinearLayout bonded;
-    private TextView status;
-    private TextView deviceLogHint;
-    private Button open;
-    private Button advancedRestore;
+    private TextView bindingStatus;
+    private BridgeScreen.ActionRow openWindow;
+    private BridgeScreen.ActionRow bindingRemove;
+    private BridgeScreen.ActionRow bindingRestore;
+
+    private TextView debugStatus;
+    private MiuixBasicView nearbyRow;
+    private MiuixBasicView autoStartRow;
 
     private String selectedAddress = "";
     private String databaseImportNote = "";
@@ -105,10 +140,8 @@ public final class MainActivity extends AppCompatActivity {
     private boolean profileAfterRestore;
     private boolean rootGranted;
     private boolean probingRoot;
-    private boolean sleepPauseWriting;
     private Change pendingPermission;
 
-    /** Open the profile window when this restore task succeeded and the user came in from the capture entry. */
     static boolean openProfileAfterRestore(Change change, boolean restored) {
         return restored && change == Change.RESTORE;
     }
@@ -124,16 +157,62 @@ public final class MainActivity extends AppCompatActivity {
     };
     private final Runnable expireRefresh = this::refresh;
 
-    @Override public void onCreate(Bundle state) {
+    @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        screen = BridgeScreen.attach(this, "小米手环桥接", false);
-        buildStatusCard();
-        buildSetupCard();
-        buildNotices();
-        buildFeatures();
-        buildHelp();
-        buildManagement();
-        buildAdvanced();
+        screen = BridgeScreen.attachTabs(this, "设备", R.menu.main_bottom,
+                R.id.tab_device, this::selectTab);
+        screen.setSyncAction(this::syncNow);
+        devicePage = screen.page();
+        toolsPage = screen.page();
+        settingsPage = screen.page();
+        setupPage = screen.page();
+        bindingPage = screen.page();
+        debugPage = screen.page();
+        permissionsPage = screen.page();
+        appearancePage = screen.page();
+        aboutPage = screen.page();
+
+        buildDeviceTab();
+        buildToolsTab();
+        buildSettingsTab();
+        buildSetupPage();
+        buildBindingPage();
+        buildDebugPage();
+        buildPermissionsPage();
+        buildAppearancePage();
+        buildAboutPage();
+
+        if (state != null) {
+            int restored = state.getInt("currentTab", R.id.tab_device);
+            if (restored == R.id.tab_tools || restored == R.id.tab_settings) currentTabId = restored;
+        }
+        backCallback = new OnBackPressedCallback(false) {
+            @Override public void handleOnBackStarted(BackEventCompat event) {
+                if (!secondaryPage) return;
+                BridgeScreen target = primaryPage(currentTabId);
+                if (target != null) screen.beginPredictiveBack(target.body);
+            }
+
+            @Override public void handleOnBackProgressed(BackEventCompat event) {
+                if (secondaryPage) screen.updatePredictiveBack(event.getProgress());
+            }
+
+            @Override public void handleOnBackCancelled() {
+                if (secondaryPage) screen.cancelPredictiveBack();
+            }
+
+            @Override public void handleOnBackPressed() {
+                if (secondaryPage) {
+                    showPrimaryTab(currentTabId, true, PageTransition.BACK);
+                    return;
+                }
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+            }
+        };
+        getOnBackPressedDispatcher().addCallback(this, backCallback);
+        showPrimaryTab(currentTabId, false, PageTransition.NONE);
+
         getContentResolver().registerContentObserver(CredentialProvider.URI, false, observer);
         getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, deviceObserver);
         getContentResolver().registerContentObserver(HealthQueueProvider.URI, false, deviceObserver);
@@ -141,163 +220,650 @@ public final class MainActivity extends AppCompatActivity {
         requestRoot();
     }
 
-    // ---- layout ----
+    // ---- tabs and pages ----
 
-    private void buildStatusCard() {
-        LinearLayout card = screen.card();
-        deviceName = screen.title(card, "小米手环");
-        statusChip = screen.chip(card, "正在读取", Tone.NEUTRAL);
-        connectionHint = screen.caption(card, "");
-        metricsLine = screen.caption(card, "");
-        healthLine = screen.caption(card, "");
-        ownershipStatus = screen.bodyText(card, "");
-        ownershipStatus.setTextSize(14);
-        homePrimary = screen.filled(card, Copy.setupLabel(SetupProgress.Step.ROOT), this::runHomePrimary);
-        connectionHint.setVisibility(View.GONE);
-        metricsLine.setVisibility(View.GONE);
-        healthLine.setVisibility(View.GONE);
+    private void selectTab(int itemId) {
+        if (itemId == R.id.tab_device || itemId == R.id.tab_tools || itemId == R.id.tab_settings) {
+            showPrimaryTab(itemId, true, PageTransition.TAB);
+        }
     }
 
-    private void buildSetupCard() {
-        setupCard = screen.card();
-        setupTitle = screen.overline(setupCard, "首次设置");
-        stepRoot = screen.stepRow(setupCard, 1, "授权 Root", StepState.CURRENT);
-        stepImport = screen.stepRow(setupCard, 2, "导入绑定", StepState.LATER);
-        stepAdd = screen.stepRow(setupCard, 3, "添加到健康", StepState.LATER);
-        primaryHint = screen.caption(setupCard, "");
-        openKsu = screen.outlined(setupCard, "打开 Root 管理器", this::openKernelSu);
-        LinearLayout prereq = screen.expander(setupCard, "开始前准备", null);
-        screen.caption(prereq, Copy.SETUP_PREREQ);
+    private void showPrimaryTab(int itemId, boolean scrollTop) {
+        showPrimaryTab(itemId, scrollTop, PageTransition.TAB);
+    }
+
+    private void showPrimaryTab(int itemId, boolean scrollTop, PageTransition transition) {
+        currentTabId = itemId;
+        secondaryPage = false;
+        BridgeScreen target = primaryPage(itemId);
+        if (target == null) return;
+        screen.setPageChrome(itemId == R.id.tab_tools ? "工具"
+                : itemId == R.id.tab_settings ? "设置" : "设备", false, null);
+        screen.setTabBarVisible(true);
+        screen.checkTab(itemId);
+        if (scrollTop) screen.scrollToTop();
+        screen.showPage(target.body, transition, transition != PageTransition.NONE);
+        if (itemId == R.id.tab_tools) refreshTools();
+        if (itemId == R.id.tab_settings) refreshSettingsRows();
+        if (backCallback != null) backCallback.setEnabled(false);
+    }
+
+    private BridgeScreen primaryPage(int itemId) {
+        return itemId == R.id.tab_tools ? toolsPage
+                : itemId == R.id.tab_settings ? settingsPage : devicePage;
+    }
+
+    private void showSecondaryPage(BridgeScreen page, String title, Runnable onBack) {
+        secondaryPage = true;
+        screen.showPage(page.body, PageTransition.FORWARD, true);
+        screen.setPageChrome(title, true, () -> {
+            showPrimaryTab(currentTabId, true, PageTransition.BACK);
+            if (onBack != null) onBack.run();
+        });
+        screen.setTabBarVisible(false);
+        screen.scrollToTop();
+        if (backCallback != null) backCallback.setEnabled(true);
+    }
+
+    @Override protected void onSaveInstanceState(Bundle outState) {
+        outState.putInt("currentTab", currentTabId);
+        super.onSaveInstanceState(outState);
+    }
+
+    // ---- device tab ----
+
+    private void buildDeviceTab() {
+        buildHero();
+        buildNotices();
+        buildUnbound();
+    }
+
+    private void buildHero() {
+        LinearLayout card = devicePage.card();
+        boundViews.add(card);
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        addWithMargins(card, top, 16, 12, 12, 4);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        top.addView(copy, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        connectionStatus = text(14, R.color.accent, true);
+        connectionStatus.setText("● 等待连接");
+        copy.addView(connectionStatus, textParams(0, 0, 0, 4));
+
+        deviceName = text(29, R.color.on_surface, true);
+        deviceName.setText("小米手环");
+        deviceName.setLetterSpacing(-0.03f);
+        copy.addView(deviceName, textParams(0, 0, 0, 4));
+
+        deviceSub = text(13, R.color.on_surface_variant, false);
+        copy.addView(deviceSub, textParams(0, 0, 0, 0));
+
+        ImageView art = new ImageView(this);
+        art.setImageResource(R.drawable.ic_band_hero);
+        art.setContentDescription(null);
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(dp(82), dp(100));
+        artParams.leftMargin = dp(8);
+        top.addView(art, artParams);
+
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.HORIZONTAL);
+        addWithMargins(card, meta, 16, 8, 16, 10);
+        batteryValue = metric(meta, "电量");
+        lastSyncValue = metric(meta, "上次同步");
+
+        statusNoticeText = text(13, R.color.on_surface_variant, false);
+        statusNoticeText.setLineSpacing(0, 1.2f);
+        statusNoticeText.setText("设备登记已保留，连接稍后继续。");
+        addWithMargins(card, statusNoticeText, 16, 0, 16, 10);
+        statusNoticeText.setVisibility(View.GONE);
+
+        syncButton = devicePage.filled(card, "同步剩余项目", this::syncNow);
+    }
+
+    private TextView metric(LinearLayout parent, String label) {
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1f);
+        params.rightMargin = dp(18);
+        parent.addView(column, params);
+        TextView caption = text(12, R.color.on_surface_variant, false);
+        caption.setText(label);
+        column.addView(caption, textParams(0, 0, 0, 3));
+        TextView value = text(18, R.color.on_surface, true);
+        value.setText("—");
+        column.addView(value, textParams(0, 0, 0, 0));
+        return value;
     }
 
     private void buildNotices() {
-        nearbyNotice = screen.noticeCard(Tone.ATTENTION);
-        screen.bodyText(nearbyNotice, "授权附近设备后即可连接手环。");
-        screen.filled(nearbyNotice, "授权附近设备", () -> {
+        nearbyNotice = devicePage.noticeCard(Tone.ATTENTION);
+        devicePage.bodyText(nearbyNotice, "授权附近设备后即可连接手环。");
+        devicePage.filled(nearbyNotice, "授权附近设备", () -> {
             pendingPermission = null;
             requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, BLUETOOTH_PERMISSION);
         });
-        notifyNotice = screen.noticeCard(Tone.NEUTRAL);
-        screen.bodyText(notifyNotice, "开启通知后，可在通知栏看到手环连接状态。");
-        screen.outlined(notifyNotice, "开启通知", this::openAppNotificationSettings);
-        healthAccessNotice = screen.noticeCard(Tone.ACTIVE);
-        screen.bodyText(healthAccessNotice,
+
+        notifyNotice = devicePage.noticeCard(Tone.NEUTRAL);
+        devicePage.bodyText(notifyNotice, "开启通知后，可在通知栏看到手环连接状态。");
+        devicePage.outlined(notifyNotice, "开启通知", this::openAppNotificationSettings);
+
+        healthAccessNotice = devicePage.noticeCard(Tone.ACTIVE);
+        devicePage.bodyText(healthAccessNotice,
                 "在系统设置里把 OPPO 健康的通知使用权关掉再打开一次，手机通知就能转到手环。");
-        screen.outlined(healthAccessNotice, "打开通知使用权", this::openHealthListenerSettings);
+        devicePage.outlined(healthAccessNotice, "打开通知使用权", this::openHealthListenerSettings);
         setShown(nearbyNotice, false);
         setShown(notifyNotice, false);
         setShown(healthAccessNotice, false);
     }
 
-    private void buildFeatures() {
-        screen.heading("功能");
-        LinearLayout links = screen.card();
-        screen.navRow(links, "设备详情", () -> startActivity(new Intent(this, BandDetailsActivity.class)));
-        screen.navRow(links, "天气同步", () -> startActivity(new Intent(this, WeatherActivity.class)));
-        screen.caption(links, "在控制中心添加「手环」磁贴，下拉或点按即可连接。");
+    private void buildUnbound() {
+        LinearLayout card = devicePage.card();
+        unboundViews.add(card);
+        card.setOnClickListener(view -> showSecondaryPage(setupPage, "首次设置", this::refreshDevice));
 
-        LinearLayout sleepCard = screen.card();
-        boolean sleepStateUnsupported = BandLiveService.sleepStateUnsupportedForCurrentDevice(this);
-        if (sleepStateUnsupported) {
-            screen.bodyText(sleepCard, "当前手环会在下次同步时更新睡眠状态。");
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_tab_device);
+        icon.setContentDescription(null);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(38), dp(38));
+        iconParams.leftMargin = dp(16);
+        iconParams.topMargin = dp(16);
+        iconParams.bottomMargin = dp(10);
+        iconParams.rightMargin = dp(16);
+        card.addView(icon, iconParams);
+
+        unboundTitle = devicePage.title(card, "还没有绑定手环");
+        unboundTitle.setTextSize(22);
+        unboundSub = devicePage.caption(card,
+                "从小米运动健康的本地数据库导入绑定。密钥和健康历史只保存在本机。");
+        unboundSub.setTextSize(14);
+
+        unboundStatusText = text(13, R.color.on_surface_variant, false);
+        unboundStatusText.setLineSpacing(0, 1.2f);
+        addWithMargins(card, unboundStatusText, 16, 0, 16, 10);
+        unboundStatusText.setVisibility(View.GONE);
+
+        unboundCta = text(14, R.color.accent, true);
+        unboundCta.setText("开始首次设置  ›");
+        unboundCta.setGravity(Gravity.CENTER_VERTICAL);
+        unboundCta.setPadding(dp(14), dp(11), dp(14), dp(11));
+        unboundCta.setBackground(BridgeScreen.roundedRect(
+                color(R.color.accent_soft), dp(14), 0, 0));
+        addWithMargins(card, unboundCta, 16, 12, 16, 12);
+
+        TextView prepHeading = devicePage.heading("开始前准备");
+        unboundViews.add(prepHeading);
+        LinearLayout prep = devicePage.card();
+        unboundViews.add(prep);
+        MiuixBasicView pair = devicePage.navRow(prep, "在系统蓝牙中配对手环", this::openBluetoothSettings);
+        pair.setSummary("配对后再导入本地绑定");
+        MiuixBasicView scope = devicePage.navRow(prep, "启用模块作用域", this::showSetupGuide);
+        scope.setSummary("小米运动健康、OPPO 健康、设备空间");
+    }
+
+    private void syncNow() {
+        if (changingOwnership || probingRoot) return;
+        if (!new BandStateRepository(this).isRegistered()) {
+            showSecondaryPage(setupPage, "首次设置", this::refreshDevice);
             return;
         }
-        MaterialSwitch sleepPause = screen.switchRow(sleepCard, "入睡后暂停音乐",
+        if (!rootGranted) {
+            requestRoot();
+            return;
+        }
+        requestNative(Change.RECONNECT);
+    }
+
+    private void refreshDevice() {
+        if (isDestroyed() || worker.isShutdown()) return;
+        updateControls();
+        refreshNotices();
+        refreshPermissionRows();
+        refreshSettingsRows();
+        if (!isUnlocked()) {
+            deviceName.setText("小米手环");
+            connectionStatus.setText("● 解锁后显示");
+            connectionStatus.setTextColor(color(R.color.on_surface_variant));
+            setOptional(deviceSub, "解锁手机后显示手环信息。");
+            setOptional(batteryValue, "—");
+            setOptional(lastSyncValue, "—");
+            unboundTitle.setText("还没有绑定手环");
+            unboundSub.setText("解锁手机后读取本机绑定信息，已有数据都在。");
+            return;
+        }
+
+        var state = LocalPrefs.open(this, "band-state");
+        boolean registered = new BandStateRepository(this).isRegistered();
+        if (registered) {
+            deviceName.setText(safeIdentity(
+                    BandCatalog.displayName(state.getString("modelId", ""), state.getString("name", "")),
+                    "已登记手环"));
+            boolean connected = state.getBoolean("connected", false);
+            connectionStatus.setText(connected ? "● 已连接" : "● 等待连接");
+            connectionStatus.setTextColor(color(connected ? R.color.accent : R.color.on_surface_variant));
+            String firmware = firmware(state);
+            setOptional(deviceSub, firmware.isEmpty() ? "连接后读取固件与设备信息" : "固件 " + firmware);
+            int battery = state.getInt("battery", -1);
+            batteryValue.setText(battery >= 0 && battery <= 100 ? battery + "%" : "—");
+            lastSyncValue.setText(syncLabel(state.getLong("lastSyncAtMs", 0)));
+        }
+
+        boolean hasBinding = false;
+        try {
+            hasBinding = new BindingStore(this).read() != null;
+        } catch (Exception ignored) { }
+        unboundTitle.setText(hasBinding ? "绑定已导入" : "还没有绑定手环");
+        unboundSub.setText(hasBinding
+                ? "添加到健康后即可连接手环。继续完成首次设置。"
+                : "从小米运动健康的本地数据库导入绑定。密钥和健康历史只保存在本机。");
+        unboundCta.setText(hasBinding ? "继续首次设置  ›" : "开始首次设置  ›");
+    }
+
+    private static String firmware(LocalPrefs state) {
+        String value = state.getString("verifiedFirmware", "");
+        if (value.isBlank()) value = state.getString("firmware", "");
+        return value == null ? "" : value.trim();
+    }
+
+    private String syncLabel(long value) {
+        if (value <= 0) return "—";
+        java.util.Calendar sync = java.util.Calendar.getInstance();
+        sync.setTimeInMillis(value);
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        boolean today = sync.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)
+                && sync.get(java.util.Calendar.DAY_OF_YEAR) == now.get(java.util.Calendar.DAY_OF_YEAR);
+        return new java.text.SimpleDateFormat(today ? "HH:mm" : "MM-dd HH:mm", Locale.getDefault())
+                .format(new Date(value));
+    }
+
+    private void showStatus(String message) {
+        boolean visible = message != null && !message.isBlank();
+        if (statusNoticeText != null) {
+            statusNoticeText.setVisibility(visible ? View.VISIBLE : View.GONE);
+            statusNoticeText.setText(visible ? message : "");
+        }
+        if (unboundStatusText != null) {
+            unboundStatusText.setVisibility(visible ? View.VISIBLE : View.GONE);
+            unboundStatusText.setText(visible ? message : "");
+        }
+    }
+
+    private void hideStatus() {
+        showStatus("");
+    }
+
+    // ---- tools tab ----
+
+    private void buildToolsTab() {
+        toolsPage.heading("快捷入口");
+        LinearLayout links = toolsPage.card();
+        deviceDetailRow = toolsPage.navRow(links, "设备详情",
+                () -> startActivity(new Intent().setClassName(this,
+                        "io.github.miam1ku.mibandoplusbridge.integration.BandDetailsInternalActivity")));
+        deviceDetailRow.setSummary("已保存历史、日汇总核对");
+        deviceDetailRow.setIcon(rowIcon(R.drawable.ic_tab_device));
+        MiuixBasicView weather = toolsPage.navRow(links, "天气同步",
+                () -> startActivity(new Intent(this, WeatherActivity.class)));
+        weather.setSummary("位置天气、城市关联");
+        weather.setIcon(rowIcon(R.drawable.ic_weather));
+
+        toolsPage.heading("使用习惯");
+        LinearLayout habit = toolsPage.card();
+        if (BandLiveService.sleepStateUnsupportedForCurrentDevice(this)) {
+            toolsPage.bodyText(habit, "当前手环会在下次同步时更新睡眠状态。");
+            return;
+        }
+        sleepPause = toolsPage.switchRow(habit, "入睡后暂停音乐",
                 "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。");
         sleepPause.setChecked(SleepMusic.enabled(this));
-        sleepPause.setOnCheckedChangeListener((button, checked) -> {
-            if (sleepPauseWriting) return;
-            applySleepPause(button, checked);
+        sleepPause.setOnStateChangeListener(checked -> {
+            if (SleepMusic.setEnabled(this, checked)) {
+                BandLiveService.sleepPauseChanged(this);
+                return true;
+            }
+            showStatus("开关状态保存中断，再拨一次即可。");
+            return false;
         });
     }
 
-    private void applySleepPause(android.widget.CompoundButton toggle, boolean enabled) {
-        if (SleepMusic.setEnabled(this, enabled)) {
-            setSleepPauseChecked(toggle, enabled);
-            BandLiveService.sleepPauseChanged(this);
-            return;
+    private void refreshTools() {
+        if (deviceDetailRow == null) return;
+        deviceDetailRow.setVisibility(new BandStateRepository(this).isRegistered()
+                ? View.VISIBLE : View.GONE);
+    }
+
+    // ---- settings tab ----
+
+    private void buildSettingsTab() {
+        settingsPage.heading(Copy.SETTINGS_APPEARANCE);
+        LinearLayout appearance = settingsPage.card();
+        appearanceRow = settingsPage.navRow(appearance, Copy.SETTINGS_THEME,
+                () -> showSecondaryPage(appearancePage, Copy.SETTINGS_THEME, this::refreshSettingsRows));
+        appearanceRow.setIcon(rowIcon(R.drawable.ic_appearance));
+        appearanceRow.setSummary(Copy.SETTINGS_THEME_SUMMARY);
+
+        settingsPage.heading(Copy.SETTINGS_PERMISSIONS);
+        LinearLayout permissions = settingsPage.card();
+        permissionRow = settingsPage.navRow(permissions, Copy.SETTINGS_PERMISSION_ROW, () -> {
+            refreshPermissionRows();
+            showSecondaryPage(permissionsPage, Copy.SETTINGS_PERMISSION_ROW, this::refreshPermissionRows);
+        });
+        permissionRow.setSummary(Copy.SETTINGS_PERMISSION_SUMMARY);
+        permissionRow.setIcon(rowIcon(R.drawable.ic_permissions));
+
+        settingsPage.heading(Copy.SETTINGS_ADVANCED);
+        LinearLayout advanced = settingsPage.card();
+        MiuixBasicView binding = settingsPage.navRow(advanced, Copy.SETTINGS_BINDING, () -> {
+            refreshBindingStatus();
+            refreshBonded();
+            showSecondaryPage(bindingPage, Copy.SETTINGS_BINDING, this::refreshDevice);
+        });
+        binding.setSummary(Copy.SETTINGS_BINDING_SUMMARY);
+        binding.setIcon(rowIcon(R.drawable.ic_tab_device));
+        MiuixBasicView debug = settingsPage.navRow(advanced, Copy.SETTINGS_DEBUG, () -> {
+            refreshDebugStatus();
+            showSecondaryPage(debugPage, Copy.SETTINGS_DEBUG, this::refreshDevice);
+        });
+        debug.setSummary(Copy.SETTINGS_DEBUG_SUMMARY);
+        debug.setIcon(rowIcon(R.drawable.ic_debug));
+
+        settingsPage.heading(Copy.SETTINGS_HELP);
+        LinearLayout about = settingsPage.card();
+        MiuixBasicView guide = settingsPage.navRow(about, Copy.SETTINGS_GUIDE, this::showSetupGuide);
+        guide.setSummary(Copy.SETTINGS_GUIDE_SUMMARY);
+        MiuixBasicView aboutEntry = settingsPage.navRow(about, Copy.SETTINGS_ABOUT,
+                () -> showSecondaryPage(aboutPage, Copy.SETTINGS_ABOUT, null));
+        aboutEntry.setSummary(Copy.VERSION_PREFIX + BuildConfig.VERSION_NAME);
+        aboutEntry.setIcon(ContextCompat.getDrawable(this, R.mipmap.ic_launcher));
+        refreshSettingsRows();
+    }
+
+    private void refreshSettingsRows() {
+        if (appearanceRow == null) return;
+        appearanceRow.setSummary(Copy.SETTINGS_THEME_SUMMARY);
+    }
+
+    private void confirmRestore() {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(Copy.RESTORE_MI_HEALTH_CONFIRM)
+                .setMessage(Copy.RESTORE_MI_HEALTH_MESSAGE)
+                .setNegativeButton(Copy.ACTION_CANCEL, null)
+                .setPositiveButton(Copy.ACTION_RESTORE, (dialog, which) -> changeOwnership(Change.RESTORE))
+                .show();
+    }
+
+    // ---- setup page ----
+
+    private void buildSetupPage() {
+        LinearLayout card = setupPage.card();
+        setupTitle = setupPage.overline(card, "首次设置 · 第 1 步，共 3 步");
+        stepRoot = setupPage.stepRow(card, 1, "授权 Root", StepState.CURRENT);
+        stepImport = setupPage.stepRow(card, 2, "导入绑定", StepState.LATER);
+        stepAdd = setupPage.stepRow(card, 3, "添加到健康", StepState.LATER);
+        primaryHint = setupPage.caption(card, "");
+        setupPrimary = setupPage.filled(card, Copy.setupLabel(SetupProgress.Step.ROOT), this::runHomePrimary);
+        openKsu = setupPage.outlined(card, "打开 Root 管理器", this::openKernelSu);
+        setupPage.textButton(card, "打开小米运动健康", () -> launchMiHealth(null));
+
+        setupPage.heading("开始前准备");
+        LinearLayout prep = setupPage.card();
+        setupPage.caption(prep, Copy.SETUP_PREREQ);
+        setupPage.caption("完成三步后，设备页会显示连接、电量与上次同步。");
+    }
+
+    private void bindChecklist(SetupProgress progress) {
+        setupTitle.setText("首次设置 · 第 " + progress.visibleIndex() + " 步，共 3 步");
+        int current = progress.visibleIndex();
+        setupPage.setStep(stepRoot, 1, "授权 Root", stepState(1, current));
+        setupPage.setStep(stepImport, 2, "导入绑定", stepState(2, current));
+        setupPage.setStep(stepAdd, 3, "添加到健康", stepState(3, current));
+        String hint = progress.primaryHint();
+        primaryHint.setText(hint);
+        primaryHint.setVisibility(hint.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private static StepState stepState(int index, int current) {
+        if (index < current) return StepState.DONE;
+        return index == current ? StepState.CURRENT : StepState.LATER;
+    }
+
+    private void runHomePrimary() {
+        if (changingOwnership || probingRoot) return;
+        switch (readProgress().current()) {
+            case ROOT -> requestRoot();
+            case IMPORT -> startBindingImport();
+            case PROFILE -> startProfileCapture();
+            case ADD -> requestNative(Change.ADD);
+            case DONE -> requestNative(Change.RECONNECT);
         }
-        setSleepPauseChecked(toggle, !enabled);
-        ownershipStatus.setText("开关状态保存中断，再拨一次即可。");
     }
 
-    private void setSleepPauseChecked(android.widget.CompoundButton toggle, boolean checked) {
-        sleepPauseWriting = true;
-        toggle.setChecked(checked);
-        sleepPauseWriting = false;
-    }
+    // ---- binding page ----
 
-    private void buildHelp() {
-        screen.heading("帮助");
-        LinearLayout help = screen.card();
-        screen.navRow(help, "使用说明", this::showSetupGuide);
-        screen.navRow(help, "系统权限设置", () -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + getPackageName()))));
-        screen.navRow(help, "发送调试日志", this::shareDebugLog);
-    }
+    private void buildBindingPage() {
+        LinearLayout statusCard = bindingPage.card();
+        bindingStatus = bindingPage.bodyText(statusCard, Copy.BINDING_STATUS_LOADING);
 
-    private void buildManagement() {
-        manageHeading = screen.heading("管理");
-        manageCard = screen.card();
-        restore = screen.outlined(manageCard, "恢复小米运动健康", () -> changeOwnership(Change.RESTORE));
-        remove = screen.dangerOutlined(manageCard, "从健康移除", () -> new MaterialAlertDialogBuilder(this)
-                .setTitle("从健康移除这只手环？")
-                .setMessage("桥接会断开连接，把手环交还小米运动健康。健康历史和加密绑定都会保留，之后可随时重新添加。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("移除", (dialog, which) -> changeOwnership(Change.REMOVE))
-                .show());
-        screen.caption(manageCard, "绑定和健康历史始终保存在本机。");
-    }
+        bindingPage.heading(Copy.DEVICE_MANAGEMENT);
+        LinearLayout manage = bindingPage.card();
+        bindingRestore = bindingPage.outlined(manage, Copy.RESTORE_MI_HEALTH, this::confirmRestore);
+        bindingRemove = bindingPage.dangerOutlined(manage, Copy.REMOVE_FROM_HEALTH, () ->
+                new MaterialAlertDialogBuilder(this)
+                        .setTitle(Copy.REMOVE_FROM_HEALTH_CONFIRM)
+                        .setMessage(Copy.REMOVE_FROM_HEALTH_MESSAGE)
+                        .setNegativeButton(Copy.ACTION_CANCEL, null)
+                        .setPositiveButton(Copy.ACTION_REMOVE, (dialog, which) -> changeOwnership(Change.REMOVE))
+                        .show());
+        bindingPage.caption(manage, Copy.BINDING_MANAGEMENT_CAPTION);
 
-    private void buildAdvanced() {
-        LinearLayout advanced = screen.expander(screen.body, "高级设置", this::refreshBonded);
-        LinearLayout importCard = screen.card(advanced);
-        screen.overline(importCard, "绑定导入");
-        screen.caption(importCard, "首页的「导入绑定」直接读取小米运动健康的本地数据库。"
-                + "这里保留旧式导入窗口：选择已配对设备，在 120 秒内由官方应用重新读取绑定。");
+        bindingPage.heading(Copy.BINDING_IMPORT_TITLE);
+        LinearLayout importCard = bindingPage.card();
+        bindingPage.caption(importCard, Copy.BINDING_IMPORT_CAPTION);
         bonded = new LinearLayout(this);
         bonded.setOrientation(LinearLayout.VERTICAL);
-        importCard.addView(bonded);
+        importCard.addView(bonded, new LinearLayout.LayoutParams(-1, -2));
         String preselected = getIntent().getStringExtra("deviceAddress");
         if (preselected != null && preselected.matches("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) {
             selectedAddress = preselected;
         }
-        open = screen.filled(importCard, "开启导入窗口（120 秒）", () -> {
+        openWindow = bindingPage.filled(importCard, Copy.BINDING_IMPORT_OPEN, () -> {
             if (!hostSupported) return;
             if (selectedAddress.isBlank()) {
-                status.setText("先在上方选择一只已配对设备。");
+                bindingStatus.setText(Copy.BINDING_SELECT_FIRST);
                 return;
             }
             Bundle selected = new Bundle();
             selected.putString("address", selectedAddress);
-            action("openWindow", selected);
+            action("openWindow", selected, bindingStatus);
         });
-        open.setEnabled(false);
-        screen.outlined(importCard, "关闭导入和采集窗口", () -> action("closeWindow", null));
-        screen.outlined(importCard, "打开小米运动健康", this::launchMiHealth);
-        advancedRestore = screen.outlined(importCard, "恢复官方管理", () -> changeOwnership(Change.RESTORE));
-        status = screen.bodyText(importCard, "正在检查小米运动健康…");
-        status.setTextSize(14);
+        openWindow.setEnabled(false);
+        bindingPage.outlined(importCard, Copy.BINDING_IMPORT_FROM_DB,
+                () -> startBindingImport(bindingStatus));
+        bindingPage.textButton(importCard, Copy.BINDING_IMPORT_CLOSE,
+                () -> action("closeWindow", null, bindingStatus));
+        bindingPage.navRow(importCard, Copy.BINDING_OPEN_MI_HEALTH,
+                () -> launchMiHealth(bindingStatus));
+    }
 
-        LinearLayout debug = screen.card(advanced);
-        screen.overline(debug, "调试");
-        screen.navRow(debug, "拉取设备日志", () -> startActivity(new Intent(this, DeviceLogActivity.class)));
-        screen.navRow(debug, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
+    private void refreshBindingStatus() {
+        if (bindingStatus == null) return;
+        boolean registered = new BandStateRepository(this).isRegistered();
+        boolean hasBinding = false;
+        String model = "";
+        try {
+            JSONObject binding = new BindingStore(this).read();
+            hasBinding = binding != null;
+            if (binding != null) model = binding.optString("model", "");
+        } catch (Exception ignored) { }
+        var state = LocalPrefs.open(this, "band-state");
+        String name = BandCatalog.displayName(model, state.getString("name", ""));
+        String text;
+        if (registered) {
+            text = "当前设备：" + name + "\n已由桥接接管，健康历史和绑定保存在本机。";
+        } else if (hasBinding) {
+            text = "绑定已导入，等待添加到健康。\n打开首次设置即可继续接管。";
+        } else {
+            text = "等待导入绑定。先配对手环，再从本机数据库读取。";
+        }
+        if (needsOfficialRestore()) text += "\n小米运动健康仍在暂停，可点「恢复官方管理」。";
+        bindingStatus.setText(databaseImportNote.isEmpty() ? text : databaseImportNote);
+        openWindow.setEnabled(hostSupported && rootGranted);
+        bindingRemove.setVisibility(registered ? View.VISIBLE : View.GONE);
+        bindingRemove.setEnabled(!changingOwnership);
+        bindingRestore.setEnabled(!changingOwnership && rootGranted);
+    }
+
+    // ---- debug and permissions ----
+
+    private void buildDebugPage() {
+        debugPage.heading("协议与诊断");
+        LinearLayout protocol = debugPage.card();
+        debugPage.navRow(protocol, "发送桥接调试日志", this::shareDebugLog);
+        debugPage.navRow(protocol, "拉取设备日志",
+                () -> startActivity(new Intent(this, DeviceLogActivity.class)));
+        debugPage.navRow(protocol, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
         if (BuildConfig.DEBUG) {
-            screen.navRow(debug, "独立连接诊断", () -> startActivity(new Intent(this, DiagnosticActivity.class)));
-            screen.outlined(debug, "采集连接参数（120 秒）", this::startProfileCapture);
-            screen.outlined(debug, "采集协议消息（120 秒）", () -> new MaterialAlertDialogBuilder(this)
+            debugPage.navRow(protocol, "独立连接诊断",
+                    () -> startActivity(new Intent(this, DiagnosticActivity.class)));
+            debugPage.outlined(protocol, "采集连接参数（120 秒）", this::startProfileCapture);
+            debugPage.outlined(protocol, "采集协议消息（120 秒）", () -> new MaterialAlertDialogBuilder(this)
                     .setTitle("采集所选手环的协议消息")
                     .setMessage("消息可能包含通知和健康数据。原始内容保存在本机私有目录，用于本次协议分析。")
                     .setNegativeButton("取消", null)
-                    .setPositiveButton("开始采集", (dialog, which) -> action("openCapture", null))
+                    .setPositiveButton("开始采集", (dialog, which) -> action("openCapture", null, debugStatus))
                     .show());
+        }
+
+        debugPage.heading("状态");
+        LinearLayout statusCard = debugPage.card();
+        debugStatus = debugPage.bodyText(statusCard, "调试工具只在本机执行。");
+    }
+
+    private void refreshDebugStatus() {
+        if (debugStatus == null) return;
+        debugStatus.setText(hostSupported
+                ? "小米运动健康已安装，可以采集连接参数或协议消息。"
+                : "安装小米运动健康并配对手环后，即可使用采集工具。");
+    }
+
+    private void buildPermissionsPage() {
+        LinearLayout hero = permissionsPage.noticeCard(Tone.ACTIVE);
+        permissionsPage.title(hero, "保持手环稳定连接");
+        permissionsPage.bodyText(hero,
+                "附近设备权限用于连接已配对的手环；自启动与关联启动用于 ColorOS 在后台恢复桥接服务。");
+
+        permissionsPage.heading("权限状态");
+        LinearLayout card = permissionsPage.card();
+        nearbyRow = permissionsPage.navRow(card, "附近设备", () -> requestPermissions(
+                new String[]{Manifest.permission.BLUETOOTH_CONNECT}, BLUETOOTH_PERMISSION));
+        nearbyRow.setSummary("连接已配对的蓝牙手环");
+        nearbyRow.setIcon(rowIcon(R.drawable.ic_nearby));
+        autoStartRow = permissionsPage.navRow(card, "自启动与关联启动", this::openAutoStartSettings);
+        autoStartRow.setSummary("ColorOS 后台运行");
+        autoStartRow.setIcon(rowIcon(R.drawable.ic_startup));
+        permissionsPage.caption("修改系统权限后返回本页即可重新检查。权限变化时，设备页会继续显示当前连接状态。");
+        refreshPermissionRows();
+    }
+
+    private void refreshPermissionRows() {
+        if (nearbyRow == null) return;
+        nearbyRow.setTip(hasBluetoothPermission() ? "已授权" : "待授权");
+        autoStartRow.setTip("系统设置");
+    }
+
+    private void openAutoStartSettings() {
+        String[][] candidates = {
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"},
+                {"com.oplus.battery", "com.oplus.battery.startupapp.StartupAppListActivity"},
+        };
+        for (String[] candidate : candidates) {
+            Intent intent = new Intent();
+            intent.setClassName(candidate[0], candidate[1]);
+            try {
+                startActivity(intent);
+                return;
+            } catch (RuntimeException ignored) { }
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (RuntimeException unavailable) {
+            Toast.makeText(this, "在系统设置 → 应用 → 自启动中管理", Toast.LENGTH_SHORT).show();
         }
     }
 
-    private static void setShown(LinearLayout cardInner, boolean shown) {
-        View frame = (View) cardInner.getParent();
-        (frame == null ? cardInner : frame).setVisibility(shown ? View.VISIBLE : View.GONE);
+    // ---- appearance page ----
+
+    private void buildAppearancePage() {
+        LinearLayout effects = appearancePage.card();
+        appearancePage.title(effects, Copy.EFFECTS_TITLE);
+        appearancePage.caption(effects, Copy.EFFECTS_CAPTION);
+        BridgeScreen.ToggleRow contour = appearancePage.switchRow(effects, Copy.CONTOUR_TITLE,
+                Copy.CONTOUR_CAPTION);
+        contour.setChecked(UiStyle.contourGlow(this));
+        contour.setOnStateChangeListener(checked -> {
+            if (!UiStyle.setContourGlow(this, checked)) {
+                Toast.makeText(this, Copy.CONTOUR_SAVE_INTERRUPTED, Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            screen.setContourGlowEnabled(checked);
+            refreshSettingsRows();
+            return true;
+        });
+        LinearLayout dock = appearancePage.card();
+        appearancePage.title(dock, Copy.DOCK_TITLE);
+        BridgeScreen.ToggleRow sync = appearancePage.switchRow(dock, Copy.SYNC_ACTION_TITLE,
+                Copy.SYNC_ACTION_CAPTION);
+        sync.setChecked(UiStyle.syncActionVisible(this));
+        sync.setOnStateChangeListener(checked -> {
+            if (!UiStyle.setSyncActionVisible(this, checked)) {
+                Toast.makeText(this, Copy.DOCK_SAVE_INTERRUPTED, Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            screen.setSyncActionVisible(checked);
+            refreshSettingsRows();
+            return true;
+        });
+        appearancePage.caption(Copy.EFFECTS_APPLIED);
+    }
+
+    // ---- about page ----
+
+    private void buildAboutPage() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(20), dp(20), dp(20), dp(20));
+        header.setBackground(BridgeScreen.roundedRect(
+                color(R.color.accent), dp(24), 0, 0));
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(56), dp(56));
+        iconParams.rightMargin = dp(16);
+        header.addView(icon, iconParams);
+
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+        TextView name = text(20, R.color.on_primary, true);
+        name.setText(Copy.APP_NAME);
+        labels.addView(name);
+        TextView version = text(13, R.color.on_primary, false);
+        version.setText(Copy.VERSION_PREFIX + BuildConfig.VERSION_NAME);
+        version.setAlpha(0.82f);
+        LinearLayout.LayoutParams versionParams = new LinearLayout.LayoutParams(-2, -2);
+        versionParams.topMargin = dp(4);
+        labels.addView(version, versionParams);
+        header.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        addWithMargins(aboutPage.body, header, 16, 16, 16, 8);
     }
 
     // ---- lifecycle ----
@@ -305,6 +871,9 @@ public final class MainActivity extends AppCompatActivity {
     @Override protected void onResume() {
         super.onResume();
         refreshNotices();
+        refreshTools();
+        refreshPermissionRows();
+        refreshSettingsRows();
         promptHostVersions();
         if (!rootGranted) requestRoot();
         else continueInit();
@@ -314,15 +883,17 @@ public final class MainActivity extends AppCompatActivity {
         refreshOwnership();
         refreshDevice();
         refreshBonded();
+        refreshBindingStatus();
         if (hostSupported) refresh();
         else worker.execute(() -> {
             boolean supported = HostIdentity.installed(this, HostIdentity.MI_PACKAGE);
             main.post(() -> {
                 if (isDestroyed()) return;
                 hostSupported = supported;
-                open.setEnabled(supported && rootGranted);
+                if (openWindow != null) openWindow.setEnabled(supported && rootGranted);
+                refreshDebugStatus();
+                refreshBindingStatus();
                 if (supported) refresh();
-                else status.setText("安装小米运动健康并配对手环后，即可使用导入窗口。");
             });
         });
         ensureCallPermissions();
@@ -370,8 +941,16 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
             } catch (RuntimeException ignored) {
-                ownershipStatus.setText("在系统设置 → 通知 → 通知使用权中找到 OPPO 健康。");
+                showStatus("在系统设置 → 通知 → 通知使用权中找到 OPPO 健康。");
             }
+        }
+    }
+
+    private void openBluetoothSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
+        } catch (RuntimeException unavailable) {
+            showSetupGuide();
         }
     }
 
@@ -394,19 +973,19 @@ public final class MainActivity extends AppCompatActivity {
                 Intent send = new Intent(Intent.ACTION_SEND);
                 send.setType("application/zip");
                 send.putExtra(Intent.EXTRA_STREAM, uri);
-                send.putExtra(Intent.EXTRA_SUBJECT, "小米手环桥接调试日志");
+                send.putExtra(Intent.EXTRA_SUBJECT, Copy.DEBUG_LOG_SUBJECT);
                 send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 Intent qq = new Intent(send);
                 qq.setPackage("com.tencent.mobileqq");
                 main.post(() -> {
                     if (isDestroyed()) return;
                     if (qq.resolveActivity(getPackageManager()) != null) startActivity(qq);
-                    else startActivity(Intent.createChooser(send, "发送调试日志"));
+                    else startActivity(Intent.createChooser(send, "发送桥接调试日志"));
                 });
             } catch (Exception failure) {
                 main.post(() -> {
-                    if (!isDestroyed()) android.widget.Toast.makeText(this,
-                            "调试日志生成中断，稍后再试一次", android.widget.Toast.LENGTH_SHORT).show();
+                    if (!isDestroyed()) Toast.makeText(this,
+                            "调试日志生成中断，稍后再试一次", Toast.LENGTH_SHORT).show();
                 });
             }
         });
@@ -443,14 +1022,15 @@ public final class MainActivity extends AppCompatActivity {
     private void requestRoot() {
         if (worker.isShutdown() || probingRoot || changingOwnership) return;
         probingRoot = true;
-        ownershipStatus.setText("正在检查 Root 授权…");
+        showStatus("正在检查 Root 授权…");
         worker.execute(() -> {
             boolean granted = new OwnershipController(this).probeRoot();
             main.post(() -> {
                 if (isDestroyed()) return;
                 probingRoot = false;
                 rootGranted = granted;
-                ownershipStatus.setText(granted ? "Root 权限已授权。" : Copy.setupHint(SetupProgress.Step.ROOT));
+                if (granted) hideStatus();
+                else showStatus(Copy.setupHint(SetupProgress.Step.ROOT));
                 updateControls();
                 refreshDevice();
                 if (granted) continueInit();
@@ -461,7 +1041,7 @@ public final class MainActivity extends AppCompatActivity {
     private void openKernelSu() {
         Intent launch = getPackageManager().getLaunchIntentForPackage("me.weishu.kernelsu");
         if (launch == null) {
-            ownershipStatus.setText("安装 Root 管理器后，为本应用打开超级用户。");
+            showStatus("安装 Root 管理器后，为本应用打开超级用户。");
             return;
         }
         startActivity(launch);
@@ -475,7 +1055,7 @@ public final class MainActivity extends AppCompatActivity {
             if (!isUnlocked()) return;
             OwnershipController owner = new OwnershipController(this);
             BandStateRepository repository = new BandStateRepository(this);
-            String message;
+            String message = "";
             try {
                 boolean registered = repository.isRegistered();
                 boolean ready = owner.nativeReady();
@@ -489,22 +1069,21 @@ public final class MainActivity extends AppCompatActivity {
                 if (registered && ready && hasBluetoothPermission()) {
                     BandLiveService.start(this);
                 }
-                message = !registered
-                        ? (needsOfficialRestore()
-                                ? "小米运动健康仍在暂停。可以添加设备，或在「管理」中恢复小米运动健康。"
-                                : "")
-                        : "NATIVE".equals(owner.mode())
-                                ? "由桥接管理，连接状态以手环实际响应为准。"
-                                : "当前由小米运动健康管理，点「立即同步」重新接管。";
+                if (!registered && needsOfficialRestore()) {
+                    message = "小米运动健康仍在暂停。可以添加设备，或在「绑定与设备信息」中恢复。";
+                } else if (registered && !"NATIVE".equals(owner.mode())) {
+                    message = "当前由小米运动健康管理，点「同步剩余项目」重新接管。";
+                }
             } catch (Exception failure) {
                 message = repository.isRegistered()
-                        ? "设备登记已保留。点「立即同步」再连接一次，或恢复官方管理。"
-                        : "点「恢复小米运动健康」再试一次。";
+                        ? "设备登记已保留。点「同步剩余项目」再连接一次，或恢复官方管理。"
+                        : Copy.RESTORE_MI_HEALTH_RETRY;
             }
             String idle = message;
             main.post(() -> {
                 if (isDestroyed()) return;
-                ownershipStatus.setText(databaseImportNote.isEmpty() ? idle : databaseImportNote);
+                if (idle.isEmpty()) hideStatus();
+                else showStatus(idle);
                 updateControls();
             });
         });
@@ -525,12 +1104,12 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (!isUnlocked()) {
-            ownershipStatus.setText("解锁手机后再管理设备。");
+            showStatus("解锁手机后再管理设备。");
             return;
         }
         changingOwnership = true;
         updateControls();
-        ownershipStatus.setText(manualSync ? "正在连接并立即同步…" : "正在处理，请稍候…");
+        showStatus(manualSync ? "正在连接并立即同步…" : "正在处理，请稍候…");
         worker.execute(() -> {
             OwnershipController owner = new OwnershipController(this);
             BandStateRepository repository = new BandStateRepository(this);
@@ -595,9 +1174,13 @@ public final class MainActivity extends AppCompatActivity {
             main.post(() -> {
                 if (isDestroyed()) return;
                 changingOwnership = false;
-                ownershipStatus.setText(visible);
+                showStatus(visible);
                 updateControls();
                 refreshDevice();
+                refreshBindingStatus();
+                if (change == Change.ADD && repository.isRegistered() && secondaryPage) {
+                    showPrimaryTab(R.id.tab_device, true, PageTransition.BACK);
+                }
                 if (profileAfterRestore && followProfile) {
                     profileAfterRestore = false;
                     startProfileWindow();
@@ -618,7 +1201,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (!isUnlocked()) {
-            ownershipStatus.setText("解锁手机后再管理设备。");
+            showStatus("解锁手机后再管理设备。");
             return;
         }
         if (!hasBluetoothPermission()) {
@@ -665,13 +1248,14 @@ public final class MainActivity extends AppCompatActivity {
         Change requested = pendingPermission;
         pendingPermission = null;
         refreshNotices();
+        refreshPermissionRows();
         refreshDevice();
         refreshBonded();
         if (hasBluetoothPermission()) {
             if (requested != null) requestNative(requested);
             else refreshOwnership();
         } else {
-            ownershipStatus.setText("授权附近设备后即可添加和连接，已有登记保持原样。");
+            showStatus("授权附近设备后即可添加和连接，已有登记保持原样。");
         }
     }
 
@@ -682,8 +1266,8 @@ public final class MainActivity extends AppCompatActivity {
         if (phone && hangup) return;
         callPermissionsAsked = true;
         if (!phone && !hangup) {
-            requestPermissions(new String[]{Manifest.permission.READ_PHONE_STATE, Manifest.permission.ANSWER_PHONE_CALLS},
-                    CALL_PERMISSIONS);
+            requestPermissions(new String[]{Manifest.permission.READ_PHONE_STATE,
+                    Manifest.permission.ANSWER_PHONE_CALLS}, CALL_PERMISSIONS);
         } else if (!phone) {
             requestPermissions(new String[]{Manifest.permission.READ_PHONE_STATE}, CALL_PERMISSIONS);
         } else {
@@ -710,27 +1294,29 @@ public final class MainActivity extends AppCompatActivity {
     private void updateControls() {
         boolean registered = new BandStateRepository(this).isRegistered();
         SetupProgress progress = readProgress();
-        if (setupCard != null) {
-            setShown(setupCard, progress.showChecklist());
-            if (progress.showChecklist()) bindChecklist(progress);
-        }
-        if (homePrimary != null) {
-            homePrimary.setText(progress.primaryLabel());
-            homePrimary.setEnabled(!changingOwnership && !probingRoot);
+        for (View view : boundViews) view.setVisibility(registered ? View.VISIBLE : View.GONE);
+        for (View view : unboundViews) view.setVisibility(registered ? View.GONE : View.VISIBLE);
+        if (setupPrimary != null) {
+            setupPrimary.setText(progress.primaryLabel());
+            setupPrimary.setEnabled(!changingOwnership && !probingRoot);
+            bindChecklist(progress);
         }
         if (openKsu != null) {
             openKsu.setVisibility(rootGranted ? View.GONE : View.VISIBLE);
             openKsu.setEnabled(!probingRoot);
         }
-        boolean officialPaused = needsOfficialRestore();
-        boolean manage = rootGranted && (registered || officialPaused);
-        manageHeading.setVisibility(manage ? View.VISIBLE : View.GONE);
-        setShown(manageCard, manage);
-        remove.setVisibility(registered ? View.VISIBLE : View.GONE);
-        remove.setEnabled(!changingOwnership);
-        restore.setVisibility(officialPaused ? View.VISIBLE : View.GONE);
-        restore.setEnabled(!changingOwnership);
-        advancedRestore.setEnabled(!changingOwnership && rootGranted);
+        if (syncButton != null) syncButton.setEnabled(!changingOwnership && !probingRoot);
+        if (deviceDetailRow != null) {
+            deviceDetailRow.setVisibility(registered ? View.VISIBLE : View.GONE);
+        }
+        if (bindingRemove != null) {
+            bindingRemove.setVisibility(registered ? View.VISIBLE : View.GONE);
+            bindingRemove.setEnabled(!changingOwnership);
+        }
+        if (bindingRestore != null) bindingRestore.setEnabled(!changingOwnership && rootGranted);
+        if (openWindow != null) {
+            openWindow.setEnabled(!changingOwnership && rootGranted && hostSupported);
+        }
     }
 
     private SetupProgress readProgress() {
@@ -755,156 +1341,38 @@ public final class MainActivity extends AppCompatActivity {
         return new SetupProgress(rootGranted, hasBinding, hasProfile, registered, nativeOwned, accountConfirmed);
     }
 
-    private void bindChecklist(SetupProgress progress) {
-        setupTitle.setText("首次设置 · 第 " + progress.visibleIndex() + "/3 步");
-        int current = progress.visibleIndex();
-        screen.setStep(stepRoot, 1, "授权 Root", stepState(1, current));
-        screen.setStep(stepImport, 2, "导入绑定", stepState(2, current));
-        screen.setStep(stepAdd, 3, "添加到健康", stepState(3, current));
-        String hint = progress.primaryHint();
-        primaryHint.setText(hint);
-        primaryHint.setVisibility(hint.isEmpty() ? View.GONE : View.VISIBLE);
-    }
-
-    private static StepState stepState(int index, int current) {
-        if (index < current) return StepState.DONE;
-        return index == current ? StepState.CURRENT : StepState.LATER;
-    }
-
-    private void runHomePrimary() {
-        if (changingOwnership || probingRoot) return;
-        switch (readProgress().current()) {
-            case ROOT -> requestRoot();
-            case IMPORT -> startBindingImport();
-            case PROFILE -> startProfileCapture();
-            case ADD -> requestNative(Change.ADD);
-            case DONE -> requestNative(Change.RECONNECT);
-        }
-    }
-
-    // ---- status card ----
-
-    private void refreshDevice() {
-        if (isDestroyed() || worker.isShutdown()) return;
-        updateControls();
-        refreshNotices();
-        if (!isUnlocked()) {
-            deviceName.setText("小米手环");
-            screen.setChip(statusChip, "解锁后显示", Tone.NEUTRAL);
-            setOptionalCaption(connectionHint, "解锁手机后显示手环信息。");
-            setDeviceLogHint("解锁后查看设备日志");
-            metricsLine.setVisibility(View.GONE);
-            healthLine.setVisibility(View.GONE);
-            return;
-        }
-        var state = LocalPrefs.open(this, "band-state");
-        if (new BandStateRepository(this).isRegistered()) {
-            deviceName.setText(safeIdentity(
-                    BandCatalog.displayName(state.getString("modelId", ""), state.getString("name", "")),
-                    "已登记手环"));
-            boolean connected = state.getBoolean("connected", false);
-            if (connected) {
-                screen.setChip(statusChip, "已连接", Tone.POSITIVE);
-                setOptionalCaption(connectionHint, "");
-            } else {
-                screen.setChip(statusChip, "等待连接", Tone.NEUTRAL);
-                setOptionalCaption(connectionHint, Copy.offlineReason(liveStatus()));
-            }
-            setOptionalCaption(metricsLine, metricsText(state));
-            setOptionalCaption(healthLine, healthExtras());
-            return;
-        }
-        deviceName.setText("小米手环");
-        screen.setChip(statusChip, "待添加", Tone.NEUTRAL);
-        setOptionalCaption(connectionHint, "");
-        healthLine.setVisibility(View.GONE);
-        try {
-            JSONObject binding = new BindingStore(this).read();
-            setOptionalCaption(metricsLine, binding == null
-                    ? "导入绑定后即可添加到健康。" : "绑定已导入，点「添加到健康」即可连接。");
-        } catch (Exception unavailable) {
-            setOptionalCaption(metricsLine, "解锁手机后显示绑定信息，已有数据都在。");
-        }
-    }
-
-    private static String metricsText(LocalPrefs state) {
-        int battery = state.getInt("battery", -1);
-        long lastSync = state.getLong("lastSyncAtMs", 0);
-        String batteryText = battery >= 0 && battery <= 100 ? "电量 " + battery + "%" : "";
-        String syncText = lastSync > 0
-                ? "同步于 " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
-                        java.text.DateFormat.SHORT).format(new java.util.Date(lastSync))
-                : "";
-        if (batteryText.isEmpty()) return syncText;
-        if (syncText.isEmpty()) return batteryText;
-        return batteryText + " · " + syncText;
-    }
-
-    private String liveStatus() {
-        java.io.File file = new java.io.File(getNoBackupFilesDir(), "live-status.txt");
-        if (file.isFile() && file.length() > 0 && file.length() < 256) {
-            try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
-                byte[] bytes = new byte[(int) file.length()];
-                int n = in.read(bytes);
-                if (n > 0) return new String(bytes, 0, n, java.nio.charset.StandardCharsets.UTF_8).trim();
-            } catch (Exception ignored) { }
-        }
-        return "";
-    }
-
-    private String healthExtras() {
-        var live = getSharedPreferences("live-service", MODE_PRIVATE);
-        String host = Copy.healthHost(live.getString("healthHostStatus", ""));
-        String collection = Copy.healthCollection(live.getString("healthCollectionStatus", ""));
-        if (collection.isEmpty()) return host;
-        return host.isEmpty() ? collection : host + "\n" + collection;
-    }
-
-    private static void setOptionalCaption(TextView view, String value) {
-        boolean show = value != null && !value.isBlank();
-        view.setVisibility(show ? View.VISIBLE : View.GONE);
-        view.setText(show ? value : "");
-    }
-
-    private void setDeviceLogHint(String value) {
-        if (deviceLogHint == null) return;
-        deviceLogHint.setText(value);
-        deviceLogHint.setVisibility(View.VISIBLE);
-    }
-
-    private static String safeIdentity(String value, String fallback) {
-        String clean = value == null ? "" : value.replaceAll("[\\p{Cntrl}\\p{Cf}]", "").trim();
-        return clean.isEmpty() || clean.length() > 80 ? fallback : clean;
-    }
-
     // ---- credential provider ----
 
-    private void action(String method, Bundle arguments) {
+    private void action(String method, Bundle arguments, TextView target) {
         if (isDestroyed() || worker.isShutdown()) return;
         worker.execute(() -> {
             try {
                 Bundle response = getContentResolver().call(CredentialProvider.URI, method, null, arguments);
                 main.post(() -> {
                     if (isDestroyed()) return;
-                    show(response);
-                    if ("openWindow".equals(method) || "openDiagnostics".equals(method) || "openCapture".equals(method)) {
+                    show(response, target);
+                    if ("openWindow".equals(method) || "openDiagnostics".equals(method)
+                            || "openCapture".equals(method)) {
                         main.removeCallbacks(expireRefresh);
                         main.postDelayed(expireRefresh, 120_100);
                     }
                 });
             } catch (RuntimeException rejected) {
                 main.post(() -> {
-                    if (!isDestroyed()) status.setText("解锁手机、核对所选设备后再点一次。");
+                    if (!isDestroyed() && target != null) {
+                        target.setText("解锁手机、核对所选设备后再点一次。");
+                    }
                 });
             }
         });
     }
 
-    private void refresh() { action("status", null); }
+    private void refresh() { action("status", null, bindingStatus); }
 
-    private void show(Bundle response) {
+    private void show(Bundle response, TextView target) {
+        if (target == null) return;
         if (response == null) {
-            status.setText("导入服务正在启动，稍后再点一次。");
+            target.setText("导入服务正在启动，稍后再点一次。");
             return;
         }
         String code = response.getString("status", "CREDENTIAL_STORAGE_FAILED");
@@ -919,68 +1387,70 @@ public final class MainActivity extends AppCompatActivity {
                 + "，字节：" + response.getLong("captureBytes") + "\n文件：" + captureFile;
         String captureError = response.getString("captureError", "");
         if (!captureError.isBlank()) text += "\n采集中断：" + captureError;
-        status.setText(text);
+        target.setText(text);
         if ("IMPORT_WINDOW_OPEN".equals(code) || "DIAGNOSTIC_WINDOW_OPEN".equals(code)) {
-            ownershipStatus.setText(text);
+            showStatus(text);
             if (launchHostAfterOpen) {
                 launchHostAfterOpen = false;
-                if (hostSupported) launchMiHealth();
+                if (hostSupported) launchMiHealth(target);
             }
         }
     }
 
-    private void launchMiHealth() {
+    private void launchMiHealth(TextView target) {
         Intent launch = getPackageManager().getLaunchIntentForPackage(HostIdentity.MI_PACKAGE);
         if (launch == null) {
             String text = "在桌面打开小米运动健康，确认它已安装并启用。";
-            status.setText(text);
-            ownershipStatus.setText(text);
+            if (target != null) target.setText(text);
+            showStatus(text);
             return;
         }
         startActivity(launch);
     }
 
-    // ---- bonded devices (advanced) ----
+    // ---- bonded devices ----
 
     private void refreshBonded() {
         if (bonded == null) return;
         bonded.removeAllViews();
         if (!hasBluetoothPermission()) {
-            screen.caption(bonded, "授权附近设备后，这里会列出已配对设备。");
+            bindingPage.caption(bonded, "授权附近设备后，这里会列出已配对设备。");
             return;
         }
         BluetoothAdapter adapter = getSystemService(BluetoothManager.class).getAdapter();
         if (adapter == null) {
-            screen.caption(bonded, "这台手机需要蓝牙才能连接手环。");
+            bindingPage.caption(bonded, "这台手机需要蓝牙才能连接手环。");
             return;
         }
         java.util.Set<BluetoothDevice> devices;
         try {
             devices = adapter.getBondedDevices();
         } catch (SecurityException denied) {
-            screen.caption(bonded, "授权附近设备后，这里会列出已配对设备。");
+            bindingPage.caption(bonded, "授权附近设备后，这里会列出已配对设备。");
             return;
         }
         if (devices == null || devices.isEmpty()) {
-            screen.caption(bonded, "在系统蓝牙设置中配对手环后，它会出现在这里。");
+            bindingPage.caption(bonded, "在系统蓝牙设置中配对手环后，它会出现在这里。");
             return;
         }
-        screen.caption(bonded, "选择已配对设备");
-        java.util.List<BluetoothDevice> listed = sortedBonded(devices);
+        bindingPage.caption(bonded, "选择已配对设备");
+        List<BluetoothDevice> listed = sortedBonded(devices);
         preferXiaomiBand(listed);
         for (BluetoothDevice device : listed) {
-            String mac = device.getAddress() == null ? "" : device.getAddress().toUpperCase(java.util.Locale.ROOT);
+            String mac = device.getAddress() == null ? ""
+                    : device.getAddress().toUpperCase(Locale.ROOT);
             String name = BandCatalog.displayName(null, device.getName());
             boolean chosen = !mac.isBlank() && mac.equals(selectedAddress);
-            Button choice = screen.outlined(bonded, (chosen ? "✓ " : "") + name, () -> {
-                selectedAddress = mac;
-                refreshBonded();
-            });
+            BridgeScreen.ActionRow choice = bindingPage.outlined(bonded,
+                    (chosen ? "✓ " : "") + name, () -> {
+                        selectedAddress = mac;
+                        refreshBonded();
+                    });
             choice.setEnabled(!chosen);
         }
     }
 
-    private static java.util.List<BluetoothDevice> sortedBonded(java.util.Set<BluetoothDevice> devices) {
+    private static List<BluetoothDevice> sortedBonded(java.util.Set<BluetoothDevice> devices) {
         ArrayList<BluetoothDevice> listed = new ArrayList<>(devices);
         listed.sort(Comparator.comparing((BluetoothDevice device) -> !BandCatalog.looksLikeBand(device.getName()))
                 .thenComparing(device -> BandCatalog.displayName(null, device.getName()),
@@ -988,7 +1458,7 @@ public final class MainActivity extends AppCompatActivity {
         return listed;
     }
 
-    private void preferXiaomiBand(java.util.List<BluetoothDevice> devices) {
+    private void preferXiaomiBand(List<BluetoothDevice> devices) {
         if (!selectedAddress.isBlank()) return;
         String onlyBand = null;
         int bands = 0;
@@ -997,7 +1467,7 @@ public final class MainActivity extends AppCompatActivity {
             String mac = device.getAddress();
             if (mac == null || mac.isBlank()) continue;
             bands++;
-            onlyBand = mac.toUpperCase(java.util.Locale.ROOT);
+            onlyBand = mac.toUpperCase(Locale.ROOT);
         }
         if (bands == 1) {
             selectedAddress = onlyBand;
@@ -1005,7 +1475,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         if (devices.size() != 1) return;
         String only = devices.get(0).getAddress();
-        if (only != null) selectedAddress = only.toUpperCase(java.util.Locale.ROOT);
+        if (only != null) selectedAddress = only.toUpperCase(Locale.ROOT);
     }
 
     // ---- database import ----
@@ -1017,7 +1487,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (!isUnlocked()) {
-            ownershipStatus.setText("解锁手机后再导入绑定。");
+            showStatus("解锁手机后再导入绑定。");
             return;
         }
         new MaterialAlertDialogBuilder(this)
@@ -1028,10 +1498,14 @@ public final class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    private void startBindingImport(TextView target) {
+        startBindingImport();
+    }
+
     private void importFromDatabase(String address) {
         if (worker.isShutdown()) return;
         databaseImportNote = "";
-        ownershipStatus.setText("正在读取本地数据库…");
+        showStatus("正在读取本地数据库…");
         worker.execute(() -> {
             Bundle selected = new Bundle();
             if (address != null && !address.isBlank()) selected.putString("address", address);
@@ -1048,9 +1522,9 @@ public final class MainActivity extends AppCompatActivity {
                     chooseDatabaseBand(shown.getStringArray("choices"));
                     return;
                 }
-                show(shown);
-                databaseImportNote = status.getText().toString();
-                ownershipStatus.setText(databaseImportNote);
+                show(shown, bindingStatus);
+                databaseImportNote = bindingStatus.getText().toString();
+                showStatus(databaseImportNote);
                 updateControls();
                 refreshDevice();
             });
@@ -1059,7 +1533,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void chooseDatabaseBand(String[] choices) {
         if (choices == null || choices.length == 0) {
-            ownershipStatus.setText(Copy.importResult("NO_BAND_KEY", "", "", ""));
+            bindingStatus.setText(Copy.importResult("NO_BAND_KEY", "", "", ""));
             return;
         }
         String[] labels = new String[choices.length];
@@ -1077,7 +1551,7 @@ public final class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    // ---- connection profile capture (debug) ----
+    // ---- connection profile capture ----
 
     private void startProfileCapture() {
         if (changingOwnership) return;
@@ -1086,11 +1560,11 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (!isUnlocked()) {
-            ownershipStatus.setText("解锁手机后再采集连接参数。");
+            showStatus("解锁手机后再采集连接参数。");
             return;
         }
         if (!hostSupported) {
-            ownershipStatus.setText("安装小米运动健康并配对手环后，即可采集连接参数。");
+            showStatus("安装小米运动健康并配对手环后，即可采集连接参数。");
             return;
         }
         if (needsOfficialRestore()) {
@@ -1115,6 +1589,67 @@ public final class MainActivity extends AppCompatActivity {
 
     private void startProfileWindow() {
         launchHostAfterOpen = true;
-        action("openDiagnostics", null);
+        action("openDiagnostics", null, debugStatus);
+    }
+
+    // ---- small view helpers ----
+
+    private TextView text(int sp, int colorResource, boolean medium) {
+        TextView view = new TextView(this);
+        view.setTextSize(sp);
+        view.setTextColor(color(colorResource));
+        if (medium) view.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        view.setIncludeFontPadding(false);
+        return view;
+    }
+
+    private Drawable rowIcon(int resource) {
+        Drawable icon = ContextCompat.getDrawable(this, resource);
+        if (icon == null) return null;
+        icon = icon.mutate();
+        icon.setTint(color(R.color.on_surface_variant));
+        return icon;
+    }
+
+    private LinearLayout.LayoutParams textParams(int left, int top, int right, int bottom) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.leftMargin = dp(left);
+        params.topMargin = dp(top);
+        params.rightMargin = dp(right);
+        params.bottomMargin = dp(bottom);
+        return params;
+    }
+
+    private void addWithMargins(LinearLayout parent, View child,
+                                int left, int top, int right, int bottom) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.leftMargin = dp(left);
+        params.topMargin = dp(top);
+        params.rightMargin = dp(right);
+        params.bottomMargin = dp(bottom);
+        parent.addView(child, params);
+    }
+
+    private static void setOptional(TextView view, String value) {
+        boolean show = value != null && !value.isBlank();
+        view.setVisibility(show ? View.VISIBLE : View.GONE);
+        view.setText(show ? value : "");
+    }
+
+    private static String safeIdentity(String value, String fallback) {
+        String clean = value == null ? "" : value.replaceAll("[\\p{Cntrl}\\p{Cf}]", "").trim();
+        return clean.isEmpty() || clean.length() > 80 ? fallback : clean;
+    }
+
+    private static void setShown(LinearLayout cardInner, boolean shown) {
+        cardInner.setVisibility(shown ? View.VISIBLE : View.GONE);
+    }
+
+    private int color(int resource) {
+        return ContextCompat.getColor(this, resource);
+    }
+
+    private int dp(int value) {
+        return BridgeScreen.dp(this, value);
     }
 }

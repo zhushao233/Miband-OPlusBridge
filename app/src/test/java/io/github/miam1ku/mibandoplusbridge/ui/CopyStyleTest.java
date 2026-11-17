@@ -32,6 +32,9 @@ public final class CopyStyleTest {
             "data/BandCatalog.java",
             "protocol/SportReportParser.java");
 
+    /** Product copy that names the requested empty state verbatim. */
+    static final Set<String> ALLOWED = Set.of("还没有绑定手环");
+
     private static final Pattern LITERAL = Pattern.compile("\"((?:[^\"\\\\\\n]|\\\\.)*)\"");
     private static final Pattern CJK = Pattern.compile("[\\u4e00-\\u9fff]");
     private static final Pattern PROTOCOL_TOKEN = Pattern.compile("\\b\\d+/\\d+\\b");
@@ -56,7 +59,9 @@ public final class CopyStyleTest {
                         scanned++;
                         String hit = firstAvoided(value);
                         if (hit == null && PROTOCOL_TOKEN.matcher(value).find()) hit = "protocol token";
-                        if (hit != null) offenders.add(relative + ":" + (index + 1) + " [" + hit + "] " + value);
+                        if (hit != null && !ALLOWED.contains(value)) {
+                            offenders.add(relative + ":" + (index + 1) + " [" + hit + "] " + value);
+                        }
                     }
                 }
             }
