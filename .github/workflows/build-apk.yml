@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      TZ: Asia/Shanghai
+      KEYSTORE_BASE64: ${{ secrets.OPLUSBAND_KEYSTORE_BASE64 }}
+      OPLUSBAND_STORE_PASSWORD: ${{ secrets.OPLUSBAND_STORE_PASSWORD }}
+      OPLUSBAND_KEY_ALIAS: ${{ secrets.OPLUSBAND_KEY_ALIAS }}
+      OPLUSBAND_KEY_PASSWORD: ${{ secrets.OPLUSBAND_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platforms;android-37.0" "build-tools;37.0.0"
+      - name: Decode keystore
+        run: |
+          python3 - <<'PY'
+          import base64, os, pathlib, sys
+          raw = os.environ.get("KEYSTORE_BASE64", "")
+          if not raw.strip():
+              sys.exit("OPLUSBAND_KEYSTORE_BASE64 is empty")
+          pathlib.Path(os.environ["RUNNER_TEMP"], "release.jks").write_bytes(base64.b64decode(raw))
+          PY
+      - name: Test and assemble
+        env:
+          OPLUSBAND_KEYSTORE: ${{ runner.temp }}/release.jks
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: miband-opbridge-${{ github.sha }}
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
