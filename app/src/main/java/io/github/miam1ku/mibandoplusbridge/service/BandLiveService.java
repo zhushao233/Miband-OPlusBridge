@@ -1084,6 +1084,7 @@ public final class BandLiveService extends Service {
                         sessionStartAtMs = System.currentTimeMillis();
                         loadSleepStateCapability(repository);
                         nextBatteryAt = now + TimeUnit.MINUTES.toNanos(BATTERY_POLL_MINUTES);
+                        nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes(false));
                         nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
                         bandAsleep = null;
                         awakeSamples = 0;
@@ -1096,7 +1097,7 @@ public final class BandLiveService extends Service {
                         nightHadQuiet = false;
                         wakeEvidence.reset();
                         wakeEvidenceCheckedAtMs = 0;
-                        boolean evidence = wakeEvidence(System.currentTimeMillis());
+                        boolean evidence = wakeEvidence(sessionStartAtMs);
                         boolean night = inActiveProtectionWindow(evidence);
                         nextHealthAt = now + TimeUnit.MINUTES.toNanos(
                                 historyPeriodMinutes(night));
@@ -1125,7 +1126,7 @@ public final class BandLiveService extends Service {
                         nextSleepStateAt = now + TimeUnit.MINUTES.toNanos(SLEEP_STATE_POLL_MINUTES);
                         nextNightStatsAt = now;
                         syncRequested = false;
-                        maybeWakeCatchup(now, evidence);
+                        maybeWakeCatchup(now, sessionStartAtMs, evidence);
                         healthReplay.request();
                         dndSync.newLink();
                         main.removeCallbacks(dndAskFallback);
@@ -1636,9 +1637,8 @@ public final class BandLiveService extends Service {
     }
 
     /** A daytime session after a night flush gets one full history pass. */
-    private void maybeWakeCatchup(long nowNanos, boolean wakeEvidence) {
+    private void maybeWakeCatchup(long nowNanos, long nowMs, boolean wakeEvidence) {
         if (inScheduledProtectionWindow() || lastNightFlushAtMs <= 0) return;
-        long nowMs = System.currentTimeMillis();
         if (nightStillSuppressedNow(wakeEvidence)) return;
         if (nowMs < lastNightFlushAtMs) return;
         try {
@@ -1780,15 +1780,15 @@ public final class BandLiveService extends Service {
             boolean historical = manualRequested || (syncRequested && !activeProtection);
             syncRequested = false;
             nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes(activeProtection));
-            requestHistoryWhenAwake(historical, evidence, activeProtection);
+            requestHistoryWhenAwake(nowMs, historical, evidence, activeProtection);
         }
         // Pending work may become eligible on timeout or when the suppression window ends.
-        flushPendingHistory(evidence, activeProtection);
+        flushPendingHistory(nowMs, evidence, activeProtection);
         if (now >= nextWeatherAt) {
             nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
             weatherSync.sendIfChanged();
         }
-        maybeWakeCatchup(now, evidence);
+        maybeWakeCatchup(now, nowMs, evidence);
     }
 
     private static boolean retryable(String code) {
@@ -2167,8 +2167,7 @@ public final class BandLiveService extends Service {
         });
     }
 
-    private boolean historyMayRun(boolean evidence) {
-        long nowMs = System.currentTimeMillis();
+    private boolean historyMayRun(long nowMs, boolean evidence) {
         if (nightStillSuppressedNow(evidence)) return false;
         boolean night = inScheduledCoreWindow();
         boolean cooldown = night && !evidence && nowMs < historyCooldownUntilMs;
@@ -2181,13 +2180,13 @@ public final class BandLiveService extends Service {
     }
 
     private void requestHistoryWhenAwake(
-            boolean historical, boolean evidence, boolean activeProtection) {
+            long nowMs, boolean historical, boolean evidence, boolean activeProtection) {
         pendingHistoryIncludesHistory |= historical && !activeProtection;
         boolean manualRequested = isManualSyncOverrideActive(manualSyncRequested,
                 manualSyncRequestedAtMs, android.os.SystemClock.elapsedRealtime());
         if (manualRequested) pendingHistoryIncludesHistory = true;
         historySyncPending = true;
-        if (!manualRequested && !historyMayRun(evidence)) {
+        if (!manualRequested && !historyMayRun(nowMs, evidence)) {
             healthCollectionStatus("HISTORY_SYNC_QUEUED");
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                     "HISTORY_SYNC deferred asleep=" + bandAsleep
@@ -2195,20 +2194,26 @@ public final class BandLiveService extends Service {
                             + " quiet=" + (sleepStateUnsupported && nightQuietObserved()));
             return;
         }
-        flushPendingHistory(evidence, activeProtection);
+        flushPendingHistory(nowMs, evidence, activeProtection);
     }
 
+    /**
+     * Fallback entry point for callers outside the tick loop (e.g. {@link #noteSleep}).
+     * Unlike the parameterized overload, this samples wake evidence once per call,
+     * which updates {@code wakeEvidenceCheckedAtMs}. Do not use it inside {@link #tick}.
+     */
     private void flushPendingHistory() {
-        boolean evidence = wakeEvidence(System.currentTimeMillis());
-        flushPendingHistory(evidence, inActiveProtectionWindow(evidence));
+        long nowMs = System.currentTimeMillis();
+        boolean evidence = wakeEvidence(nowMs);
+        flushPendingHistory(nowMs, evidence, inActiveProtectionWindow(evidence));
     }
 
-    private void flushPendingHistory(boolean evidence, boolean activeProtection) {
+    private void flushPendingHistory(long nowMs, boolean evidence, boolean activeProtection) {
         if (!historySyncPending) return;
         boolean manualOverride = consumeManualSync(manualSyncRequested, historySync != null,
                 manualSyncRequestedAtMs, android.os.SystemClock.elapsedRealtime());
         if (historySync == null) return;
-        if (!historyShouldFlush(true, manualOverride, historyMayRun(evidence))) return;
+        if (!historyShouldFlush(true, manualOverride, historyMayRun(nowMs, evidence))) return;
         boolean historical = pendingHistoryIncludesHistory
                 && (manualOverride || !activeProtection);
         historySyncPending = false;
