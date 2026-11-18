@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.ui;
 
+import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -125,6 +126,15 @@ public final class CopyStyleTest {
         assertFalse(Copy.ownershipFailure("X").isBlank());
         assertFalse(Copy.importResult("X", "", "", "").isBlank());
         assertFalse(Copy.weatherError("X").isBlank());
+    }
+
+    @Test public void sleepProtectionCopyKeepsMinutePrecisionAndDescribesTheSlider() {
+        var onTheHour = new SleepProtectionSchedule.Window(22 * 60, 8 * 60);
+        var withMinutes = new SleepProtectionSchedule.Window(22 * 60 + 25, 8 * 60);
+        assertEquals("保护时长 10 小时", Copy.sleepProtectionDuration(onTheHour));
+        assertEquals("保护时长 9 小时 35 分", Copy.sleepProtectionDuration(withMinutes));
+        assertFalse(Copy.SLEEP_PROTECTION_SLIDER_DESC.isBlank());
+        assertEquals("睡眠保护 22:00 到 08:00", Copy.sleepProtectionSliderDesc(onTheHour));
     }
 
     static String firstAvoided(String value) {
