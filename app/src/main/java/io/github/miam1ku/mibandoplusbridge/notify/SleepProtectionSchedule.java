@@ -14,6 +14,7 @@ public final class SleepProtectionSchedule {
     public static final int MIN_DURATION_MINUTES = 4 * 60;
     public static final int DEFAULT_START_MINUTE = 22 * 60;
     public static final int DEFAULT_END_MINUTE = 8 * 60;
+    public static final int PRESET_SAFETY_TAIL_EARLIEST_END_MINUTE = 6 * 60;
     public static final int PRESET_HARD_END_MINUTE = 14 * 60;
 
     private static final String PREFS = "features";
@@ -82,12 +83,14 @@ public final class SleepProtectionSchedule {
     }
 
     /**
-     * The former 08:00-14:00 fallback remains active only after a morning core-window end.
-     * A core window ending after 14:00 is already long enough on its own.
+     * The former morning safety tail remains active only when the core window ends between 06:00
+     * and the preset 08:00 end. Later custom ends already provide morning protection; earlier ends
+     * such as 02:00 must not stretch a short cross-midnight window into the afternoon.
      */
     public static boolean inSafetyTail(Window window, int minuteOfDay) {
         int end = normalize(window.endMinute);
-        if (end > PRESET_HARD_END_MINUTE) return false;
+        if (end < PRESET_SAFETY_TAIL_EARLIEST_END_MINUTE
+                || end > DEFAULT_END_MINUTE) return false;
         int minute = normalize(minuteOfDay);
         return minute >= end && minute < PRESET_HARD_END_MINUTE;
     }

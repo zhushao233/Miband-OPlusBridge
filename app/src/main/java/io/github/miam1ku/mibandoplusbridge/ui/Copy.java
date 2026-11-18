@@ -41,6 +41,7 @@ public final class Copy {
             "保护时段已保存，运行中的服务会立即使用新设置。";
     public static final String SLEEP_PROTECTION_SAVE_INTERRUPTED =
             "保护时段保存中断，再点一次即可。";
+    public static final String SLEEP_PROTECTION_SLIDER_DESC = "睡眠保护开始与结束时间";
     public static final String SETTINGS_ADVANCED = "高级";
     public static final String SETTINGS_BINDING = "绑定与设备信息";
     public static final String SETTINGS_BINDING_SUMMARY = "重新导入、设备选择与管理";
@@ -94,7 +95,16 @@ public final class Copy {
     }
 
     public static String sleepProtectionDuration(SleepProtectionSchedule.Window window) {
-        return "保护时长 " + window.durationMinutes() / 60 + " 小时";
+        int total = window.durationMinutes();
+        int hours = total / 60;
+        int minutes = total % 60;
+        return minutes == 0
+                ? "保护时长 " + hours + " 小时"
+                : "保护时长 " + hours + " 小时 " + minutes + " 分";
+    }
+
+    public static String sleepProtectionSliderDesc(SleepProtectionSchedule.Window window) {
+        return "睡眠保护 " + window.startLabel() + " 到 " + window.endLabel();
     }
 
     // ---- setup ----

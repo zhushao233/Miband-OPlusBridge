@@ -15,6 +15,9 @@ public final class SleepProtectionScheduleTest {
         assertTrue(SleepProtectionSchedule.inCoreWindow(window, 23 * 60));
         assertTrue(SleepProtectionSchedule.inCoreWindow(window, 7 * 60));
         assertFalse(SleepProtectionSchedule.inCoreWindow(window, 8 * 60));
+        assertTrue(SleepProtectionSchedule.inSafetyTail(window, 10 * 60));
+        assertTrue(SleepProtectionSchedule.inProtectionWindow(window, 13 * 60 + 59));
+        assertFalse(SleepProtectionSchedule.inProtectionWindow(window, 14 * 60));
     }
 
     @Test public void customCoreWindowUsesItsOwnStartAndEnd() {
@@ -45,6 +48,28 @@ public final class SleepProtectionScheduleTest {
         assertFalse(SleepProtectionSchedule.inSafetyTail(window, 14 * 60));
         assertTrue(SleepProtectionSchedule.inProtectionWindow(window, 14 * 60 + 59));
         assertFalse(SleepProtectionSchedule.inProtectionWindow(window, 15 * 60));
+
+        var endsAtHardBoundary = new SleepProtectionSchedule.Window(22 * 60, 14 * 60);
+        assertTrue(SleepProtectionSchedule.inProtectionWindow(endsAtHardBoundary, 13 * 60 + 59));
+        assertFalse(SleepProtectionSchedule.inSafetyTail(endsAtHardBoundary, 14 * 60));
+        assertFalse(SleepProtectionSchedule.inProtectionWindow(endsAtHardBoundary, 14 * 60));
+    }
+
+    @Test public void morningSafetyTailKeepsTheExistingDefaultBehavior() {
+        var window = new SleepProtectionSchedule.Window(22 * 60, 6 * 60);
+        assertTrue(SleepProtectionSchedule.inSafetyTail(window, 10 * 60));
+    }
+
+    @Test public void customEndAfterThePresetMorningWindowHasNoTail() {
+        var window = new SleepProtectionSchedule.Window(23 * 60, 10 * 60);
+        assertFalse(SleepProtectionSchedule.inSafetyTail(window, 12 * 60));
+        assertFalse(SleepProtectionSchedule.inProtectionWindow(window, 12 * 60));
+    }
+
+    @Test public void veryEarlyCrossMidnightEndDoesNotExtendIntoTheAfternoon() {
+        var window = new SleepProtectionSchedule.Window(23 * 60, 2 * 60);
+        assertFalse(SleepProtectionSchedule.inSafetyTail(window, 10 * 60));
+        assertFalse(SleepProtectionSchedule.inProtectionWindow(window, 10 * 60));
     }
 
     @Test public void minimumWindowIsFourHours() {

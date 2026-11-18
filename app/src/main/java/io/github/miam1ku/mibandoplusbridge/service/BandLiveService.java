@@ -14,6 +14,7 @@ import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
+import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
 import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
 import java.io.File;
 import java.io.FileWriter;
@@ -57,9 +58,8 @@ public final class BandLiveService extends Service {
     private static final int NIGHT_START_HOUR = 22;
     private static final int NIGHT_END_HOUR = 8;
     private static final int NIGHT_HARD_END_HOUR = 14;
-    private volatile io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule.Window
-            sleepProtectionWindow =
-            io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule.defaultWindow();
+    private volatile SleepProtectionSchedule.Window sleepProtectionWindow =
+            SleepProtectionSchedule.defaultWindow();
     private static final long QUIET_STEPS_MINUTES = 60;
     private static final long QUIET_SAMPLE_MAX_AGE_MINUTES = 90;
     private static final long QUIET_WAKE_STEPS = 30;
@@ -400,8 +400,7 @@ public final class BandLiveService extends Service {
     public static void sleepProtectionChanged(Context context) {
         BandLiveService live = instance;
         if (live == null || live.stopRequested) return;
-        live.sleepProtectionWindow =
-                io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule.load(context);
+        live.sleepProtectionWindow = SleepProtectionSchedule.load(context);
         live.wakeEvidenceCheckedAtMs = 0;
         live.nextHealthAt = System.nanoTime();
         try {
@@ -872,8 +871,7 @@ public final class BandLiveService extends Service {
             io.github.miam1ku.mibandoplusbridge.service.RootFreezeGuard.start(this);
         });
         instance = this;
-        sleepProtectionWindow =
-                io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule.load(this);
+        sleepProtectionWindow = SleepProtectionSchedule.load(this);
         sleepPauseOn = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.enabled(this);
         long armed = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.armedAt(this);
         if (sleepPauseOn && armed == Long.MAX_VALUE) {
@@ -1086,7 +1084,6 @@ public final class BandLiveService extends Service {
                         sessionStartAtMs = System.currentTimeMillis();
                         loadSleepStateCapability(repository);
                         nextBatteryAt = now + TimeUnit.MINUTES.toNanos(BATTERY_POLL_MINUTES);
-                        nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutesNow());
                         nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
                         bandAsleep = null;
                         awakeSamples = 0;
@@ -1099,7 +1096,10 @@ public final class BandLiveService extends Service {
                         nightHadQuiet = false;
                         wakeEvidence.reset();
                         wakeEvidenceCheckedAtMs = 0;
-                        boolean night = inActiveProtectionWindow();
+                        boolean evidence = wakeEvidence(System.currentTimeMillis());
+                        boolean night = inActiveProtectionWindow(evidence);
+                        nextHealthAt = now + TimeUnit.MINUTES.toNanos(
+                                historyPeriodMinutes(night));
                         boolean restartCooldown = night && lastNightFlushAtMs > 0
                                 && sessionStartAtMs >= lastNightFlushAtMs
                                 && sessionStartAtMs - lastNightFlushAtMs
@@ -1125,7 +1125,7 @@ public final class BandLiveService extends Service {
                         nextSleepStateAt = now + TimeUnit.MINUTES.toNanos(SLEEP_STATE_POLL_MINUTES);
                         nextNightStatsAt = now;
                         syncRequested = false;
-                        maybeWakeCatchup(now);
+                        maybeWakeCatchup(now, evidence);
                         healthReplay.request();
                         dndSync.newLink();
                         main.removeCallbacks(dndAskFallback);
@@ -1345,15 +1345,18 @@ public final class BandLiveService extends Service {
         return isSleepProtectionWindow(hour) && !wakeEvidence;
     }
 
+    /**
+     * Preset 22:00-14:00 window API. Callers with a saved custom schedule use the
+     * {@link #isSleepProtectionWindow(Context, int)} overload instead.
+     */
     public static boolean isSleepProtectionWindow(int hour) {
         return hour >= NIGHT_START_HOUR || hour < NIGHT_HARD_END_HOUR;
     }
 
-    /** Reads the saved custom window for callers that do not hold the live service. */
+    /** Reads the saved custom core window and safety tail without requiring a live service. */
     public static boolean isSleepProtectionWindow(Context context, int minuteOfDay) {
-        var window = io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule.load(context);
-        return io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule
-                .inProtectionWindow(window, minuteOfDay);
+        return SleepProtectionSchedule.inProtectionWindow(
+                SleepProtectionSchedule.load(context), minuteOfDay);
     }
 
     private static int minuteOfDay() {
@@ -1362,28 +1365,31 @@ public final class BandLiveService extends Service {
     }
 
     private boolean inScheduledCoreWindow() {
-        return io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule
-                .inCoreWindow(sleepProtectionWindow, minuteOfDay());
+        return SleepProtectionSchedule.inCoreWindow(sleepProtectionWindow, minuteOfDay());
     }
 
     private boolean inScheduledProtectionWindow() {
-        return io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule
-                .inProtectionWindow(sleepProtectionWindow, minuteOfDay());
-    }
-
-    private boolean inActiveProtectionWindow() {
-        return io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule
-                .protectedWithoutWakeEvidence(sleepProtectionWindow, minuteOfDay(),
-                        wakeEvidence(System.currentTimeMillis()));
+        return SleepProtectionSchedule.inProtectionWindow(sleepProtectionWindow, minuteOfDay());
     }
 
     private boolean nightStillSuppressedNow(boolean wakeEvidence) {
-        return io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule
-                .protectedWithoutWakeEvidence(sleepProtectionWindow, minuteOfDay(), wakeEvidence);
+        return SleepProtectionSchedule.protectedWithoutWakeEvidence(
+                sleepProtectionWindow, minuteOfDay(), wakeEvidence);
+    }
+
+    /** Pure decision: callers sample wake evidence once and pass that snapshot here. */
+    private boolean inActiveProtectionWindow(boolean wakeEvidence) {
+        return SleepProtectionSchedule.protectedWithoutWakeEvidence(
+                sleepProtectionWindow, minuteOfDay(), wakeEvidence);
     }
 
     static boolean shouldPollSleepState(int hour, boolean nightTrackingEnabled) {
         return nightTrackingEnabled && isNightWindow(hour);
+    }
+
+    static boolean shouldPollSleepState(
+            SleepProtectionSchedule.Window window, int minuteOfDay, boolean nightTrackingEnabled) {
+        return nightTrackingEnabled && SleepProtectionSchedule.inProtectionWindow(window, minuteOfDay);
     }
 
     private boolean nightTrackingEnabled() {
@@ -1394,8 +1400,8 @@ public final class BandLiveService extends Service {
         return isNightWindow(hour) ? NIGHT_POLL_MINUTES : IDLE_POLL_MINUTES;
     }
 
-    private long historyPeriodMinutesNow() {
-        return inActiveProtectionWindow() ? NIGHT_POLL_MINUTES : IDLE_POLL_MINUTES;
+    private static long historyPeriodMinutes(boolean activeProtection) {
+        return activeProtection ? NIGHT_POLL_MINUTES : IDLE_POLL_MINUTES;
     }
 
     static long nightStatsRefreshMinutes() {
@@ -1630,10 +1636,10 @@ public final class BandLiveService extends Service {
     }
 
     /** A daytime session after a night flush gets one full history pass. */
-    private void maybeWakeCatchup(long nowNanos) {
-        if (inScheduledCoreWindow() || lastNightFlushAtMs <= 0) return;
+    private void maybeWakeCatchup(long nowNanos, boolean wakeEvidence) {
+        if (inScheduledProtectionWindow() || lastNightFlushAtMs <= 0) return;
         long nowMs = System.currentTimeMillis();
-        if (nightStillSuppressedNow(wakeEvidence(nowMs))) return;
+        if (nightStillSuppressedNow(wakeEvidence)) return;
         if (nowMs < lastNightFlushAtMs) return;
         try {
             String deviceId = new BandStateRepository(this).deviceId();
@@ -1713,6 +1719,9 @@ public final class BandLiveService extends Service {
         }
         long now = System.nanoTime();
         updateNightTransition(now);
+        long nowMs = System.currentTimeMillis();
+        boolean evidence = wakeEvidence(nowMs);
+        boolean activeProtection = inActiveProtectionWindow(evidence);
         long beatAge = android.os.SystemClock.elapsedRealtime() - supervisorBeatMs;
         if (running.get() && supervisorBeatMs != 0L && beatAge > SUPERVISOR_STALL_MS) {
             // The coordinator survives a process freeze, so it can put the worker back after the
@@ -1768,18 +1777,18 @@ public final class BandLiveService extends Service {
         boolean manualRequested = isManualSyncOverrideActive(manualSyncRequested,
                 manualSyncRequestedAtMs, android.os.SystemClock.elapsedRealtime());
         if (syncRequested || manualRequested || now >= nextHealthAt) {
-            boolean historical = manualRequested || (syncRequested && !inActiveProtectionWindow());
+            boolean historical = manualRequested || (syncRequested && !activeProtection);
             syncRequested = false;
-            nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutesNow());
-            requestHistoryWhenAwake(historical);
+            nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes(activeProtection));
+            requestHistoryWhenAwake(historical, evidence, activeProtection);
         }
         // Pending work may become eligible on timeout or when the suppression window ends.
-        flushPendingHistory();
+        flushPendingHistory(evidence, activeProtection);
         if (now >= nextWeatherAt) {
             nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
             weatherSync.sendIfChanged();
         }
-        maybeWakeCatchup(now);
+        maybeWakeCatchup(now, evidence);
     }
 
     private static boolean retryable(String code) {
@@ -2158,9 +2167,8 @@ public final class BandLiveService extends Service {
         });
     }
 
-    private boolean historyMayRun() {
+    private boolean historyMayRun(boolean evidence) {
         long nowMs = System.currentTimeMillis();
-        boolean evidence = wakeEvidence(nowMs);
         if (nightStillSuppressedNow(evidence)) return false;
         boolean night = inScheduledCoreWindow();
         boolean cooldown = night && !evidence && nowMs < historyCooldownUntilMs;
@@ -2172,13 +2180,14 @@ public final class BandLiveService extends Service {
                 waitingForInitialSleepState, quiet, cooldown, stale);
     }
 
-    private void requestHistoryWhenAwake(boolean historical) {
-        pendingHistoryIncludesHistory |= historical && !inActiveProtectionWindow();
+    private void requestHistoryWhenAwake(
+            boolean historical, boolean evidence, boolean activeProtection) {
+        pendingHistoryIncludesHistory |= historical && !activeProtection;
         boolean manualRequested = isManualSyncOverrideActive(manualSyncRequested,
                 manualSyncRequestedAtMs, android.os.SystemClock.elapsedRealtime());
         if (manualRequested) pendingHistoryIncludesHistory = true;
         historySyncPending = true;
-        if (!manualRequested && !historyMayRun()) {
+        if (!manualRequested && !historyMayRun(evidence)) {
             healthCollectionStatus("HISTORY_SYNC_QUEUED");
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                     "HISTORY_SYNC deferred asleep=" + bandAsleep
@@ -2186,17 +2195,22 @@ public final class BandLiveService extends Service {
                             + " quiet=" + (sleepStateUnsupported && nightQuietObserved()));
             return;
         }
-        flushPendingHistory();
+        flushPendingHistory(evidence, activeProtection);
     }
 
     private void flushPendingHistory() {
+        boolean evidence = wakeEvidence(System.currentTimeMillis());
+        flushPendingHistory(evidence, inActiveProtectionWindow(evidence));
+    }
+
+    private void flushPendingHistory(boolean evidence, boolean activeProtection) {
         if (!historySyncPending) return;
         boolean manualOverride = consumeManualSync(manualSyncRequested, historySync != null,
                 manualSyncRequestedAtMs, android.os.SystemClock.elapsedRealtime());
         if (historySync == null) return;
-        if (!historyShouldFlush(true, manualOverride, historyMayRun())) return;
+        if (!historyShouldFlush(true, manualOverride, historyMayRun(evidence))) return;
         boolean historical = pendingHistoryIncludesHistory
-                && (manualOverride || !inActiveProtectionWindow());
+                && (manualOverride || !activeProtection);
         historySyncPending = false;
         pendingHistoryIncludesHistory = false;
         healthCollectionStatus("HISTORY_SYNCING");
@@ -2239,7 +2253,8 @@ public final class BandLiveService extends Service {
     private void requestSleepState() {
         var queue = commands;
         if (sleepStateUnsupported || stopRequested || queue == null
-                || !inScheduledProtectionWindow() || !nightTrackingEnabled()) {
+                || !shouldPollSleepState(
+                        sleepProtectionWindow, minuteOfDay(), nightTrackingEnabled())) {
             return;
         }
         long epoch = sessionEpoch;

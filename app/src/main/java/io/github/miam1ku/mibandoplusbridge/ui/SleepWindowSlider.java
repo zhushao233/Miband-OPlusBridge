@@ -11,7 +11,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import io.github.miam1ku.mibandoplusbridge.R;
 import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
-import java.util.Locale;
 
 /** A two-handle whole-hour sleep window. The highlighted segment wraps across midnight. */
 public final class SleepWindowSlider extends View {
@@ -73,7 +72,7 @@ public final class SleepWindowSlider extends View {
         setMinimumHeight(Math.round(dp(116)));
         setFocusable(true);
         setClickable(true);
-        setContentDescription("睡眠保护开始与结束时间");
+        setContentDescription(Copy.SLEEP_PROTECTION_SLIDER_DESC);
     }
 
     public void setOnRangeChangedListener(OnRangeChangedListener listener) {
@@ -298,9 +297,8 @@ public final class SleepWindowSlider extends View {
     }
 
     private void updateAccessibilityDescription() {
-        setContentDescription(String.format(Locale.ROOT, "睡眠保护 %s 到 %s",
-                SleepProtectionSchedule.label(startMinute),
-                SleepProtectionSchedule.label(endMinute)));
+        setContentDescription(Copy.sleepProtectionSliderDesc(
+                new SleepProtectionSchedule.Window(startMinute, endMinute)));
     }
 
     private float dp(float value) {
