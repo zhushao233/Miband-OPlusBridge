@@ -69,6 +69,7 @@ public final class BandLiveServiceSleepPolicyTest {
         assertTrue(evidence.observed());
         evidence.reset();
         assertFalse(evidence.observed());
+        assertFalse(evidence.acceptsClosedInterval(System.currentTimeMillis()));
     }
 
     @Test public void nightAwakeNeedsTwoConsecutiveSamples() {

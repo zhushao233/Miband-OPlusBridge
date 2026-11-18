@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.ui;
 
+import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
+
 /**
  * User-facing copy shared by the module UI.
  * Style: say what the state is, then what to tap next. {@code CopyStyleTest} checks the wording.
@@ -20,6 +22,25 @@ public final class Copy {
     public static final String SETTINGS_PERMISSIONS = "应用权限";
     public static final String SETTINGS_PERMISSION_ROW = "权限与后台";
     public static final String SETTINGS_PERMISSION_SUMMARY = "附近设备、自启动与关联启动";
+    public static final String SETTINGS_SLEEP_SYNC = "睡眠同步";
+    public static final String SLEEP_PROTECTION = "睡眠保护时段";
+    public static final String SLEEP_PROTECTION_CAPTION =
+            "用双头时间滑块设置入睡和起床时刻。清醒证据出现前，结束时刻之后继续沿用预设安全防护，最晚到 14:00。";
+    public static final String SLEEP_PROTECTION_RANGE = "核心睡眠时段";
+    public static final String SLEEP_PROTECTION_MINIMUM =
+            "保护跨度至少为 4 小时，清醒证据可提前结束保护，随后恢复平时的自动同步节奏。";
+    public static final String SLEEP_PROTECTION_START = "开始";
+    public static final String SLEEP_PROTECTION_END = "结束";
+    public static final String SLEEP_PROTECTION_INPUT_HINT = "23:00";
+    public static final String SLEEP_PROTECTION_INPUT_INVALID =
+            "按 HH:00 输入整点时刻，调整后再保存。";
+    public static final String SLEEP_PROTECTION_TOO_SHORT =
+            "开始与结束时刻至少相隔 4 小时，调整后再保存。";
+    public static final String SLEEP_PROTECTION_SAVE = "保存保护时段";
+    public static final String SLEEP_PROTECTION_SAVED =
+            "保护时段已保存，运行中的服务会立即使用新设置。";
+    public static final String SLEEP_PROTECTION_SAVE_INTERRUPTED =
+            "保护时段保存中断，再点一次即可。";
     public static final String SETTINGS_ADVANCED = "高级";
     public static final String SETTINGS_BINDING = "绑定与设备信息";
     public static final String SETTINGS_BINDING_SUMMARY = "重新导入、设备选择与管理";
@@ -67,6 +88,14 @@ public final class Copy {
     public static final String ACTION_CANCEL = "取消";
     public static final String ACTION_RESTORE = "恢复";
     public static final String ACTION_REMOVE = "移除";
+
+    public static String sleepProtectionSummary(SleepProtectionSchedule.Window window) {
+        return window.startLabel() + "–" + window.endLabel() + " · 自定义保护时段";
+    }
+
+    public static String sleepProtectionDuration(SleepProtectionSchedule.Window window) {
+        return "保护时长 " + window.durationMinutes() / 60 + " 小时";
+    }
 
     // ---- setup ----
 
