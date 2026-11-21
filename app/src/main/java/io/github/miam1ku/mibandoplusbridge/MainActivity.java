@@ -869,7 +869,6 @@ public final class MainActivity extends AppCompatActivity {
 
         sleepProtectionPage.heading(Copy.SLEEP_PROTECTION_RANGE);
         LinearLayout windowCard = sleepProtectionPage.card();
-        sleepProtectionPage.caption(windowCard, Copy.SLEEP_PROTECTION_MINIMUM);
 
         sleepProtectionSlider = new SleepWindowSlider(this);
         addWithMargins(windowCard, sleepProtectionSlider, 8, 4, 8, 0);
