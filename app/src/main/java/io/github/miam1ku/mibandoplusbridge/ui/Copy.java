@@ -25,10 +25,8 @@ public final class Copy {
     public static final String SETTINGS_SLEEP_SYNC = "睡眠同步";
     public static final String SLEEP_PROTECTION = "睡眠保护时段";
     public static final String SLEEP_PROTECTION_CAPTION =
-            "用双头时间滑块设置入睡和起床时刻。清醒证据出现前，结束时刻之后继续沿用预设安全防护，最晚到 14:00。";
+            "按照日常睡眠习惯设置大约入睡和起床时刻。";
     public static final String SLEEP_PROTECTION_RANGE = "核心睡眠时段";
-    public static final String SLEEP_PROTECTION_MINIMUM =
-            "保护跨度至少为 4 小时，清醒证据可提前结束保护，随后恢复平时的自动同步节奏。";
     public static final String SLEEP_PROTECTION_START = "开始";
     public static final String SLEEP_PROTECTION_END = "结束";
     public static final String SLEEP_PROTECTION_INPUT_HINT = "23:00";
@@ -54,7 +52,7 @@ public final class Copy {
 
     public static final String EFFECTS_TITLE = "凝光视效";
     public static final String EFFECTS_CAPTION =
-            "控制底栏、返回按钮等 COUI 组件的轮廓高光与内光晕，模糊和投影保持原样。";
+            "控制底栏、返回按钮等界面轮廓高光与内光晕，模糊和投影保持原样。";
     public static final String CONTOUR_TITLE = "轮廓光";
     public static final String CONTOUR_CAPTION = "关闭后保留组件材质，只隐藏描边与内光晕。";
     public static final String CONTOUR_SAVE_INTERRUPTED = "轮廓光设置保存中断，再试一次";
@@ -121,7 +119,7 @@ public final class Copy {
 
     public static String setupHint(SetupProgress.Step step) {
         return switch (step) {
-            case ROOT -> "在 KernelSU 中为「小米手环桥接」打开超级用户，回到这里点「检查 Root」。";
+            case ROOT -> "在 Root 管理器中为「小米手环桥接」打开超级用户，回到这里点「检查 Root」。";
             case IMPORT -> "从小米运动健康的本地数据库读取手环密钥，全程在本机完成。";
             case PROFILE -> "绑定已保存，点「添加到健康」即可连接。";
             case ADD -> "小米运动健康会暂停，由桥接接管手环。手环离线时也可以先添加。";
@@ -174,7 +172,7 @@ public final class Copy {
             case "DEVICE_IDENTITY_CHANGED" -> "这次导入的是另一只手环。请导入原来那只，或先移除再添加新手环。";
             case "BAND_STATE_STORAGE_FAILED", "OWNERSHIP_STORAGE_FAILED" -> "清理一些存储空间后再点一次。";
             case "ROOT_REQUIRED", "ROOT_ACTION_FAILED", "ROOT_ACTION_TIMEOUT" ->
-                    "在 KernelSU 中确认已允许本应用，再点一次。";
+                    "在 Root 管理器中确认已允许本应用，再点一次。";
             case "HOST_VERSION_UNSUPPORTED" -> "请把小米运动健康换到实测版本 3.59.1 后再试。";
             case "NEARBY_PERMISSION_REQUIRED" -> "授权附近设备后再点一次。";
             case "DEVICE_NOT_REGISTERED" -> "先点「添加到健康」。";
