@@ -127,6 +127,7 @@ fun NavigationBar(
     onRightClick: (() -> Unit)? = null,
     rightContainerColor: Color = Color.Unspecified,
     rightIconColor: Color = Color.White,
+    rightIconRotationZ: Float = 0f,
     dark: Boolean = CouiTheme.isDark,
     lightColor: Color = Color.White,
     themeTint: Color = CouiTheme.materialTintFor(dark),
@@ -402,7 +403,7 @@ fun NavigationBar(
                         .then(if (rightInteractive && onRightClick != null) Modifier.couiFabFeedback(dark, interactionSource).clickable(
                             interactionSource = interactionSource, indication = null, role = Role.Button,
                             onClick = onRightClick,
-                        ) else Modifier).padding(16.dp), tint = rightIconColor)
+                        ) else Modifier).graphicsLayer { rotationZ = rightIconRotationZ }.padding(16.dp), tint = rightIconColor)
                 }
             }
         }

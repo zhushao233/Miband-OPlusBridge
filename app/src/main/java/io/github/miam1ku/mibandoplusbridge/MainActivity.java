@@ -7,7 +7,10 @@ import android.app.NotificationManager;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
@@ -35,6 +38,7 @@ import androidx.appcompat.widget.AppCompatEditText;
 import androidx.core.content.ContextCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.hchen.himiuix.MiuixBasicView;
+import com.itos.coui.host.CouiConfirmDialog;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
@@ -63,6 +67,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONObject;
@@ -153,6 +158,9 @@ public final class MainActivity extends AppCompatActivity {
     private boolean profileAfterRestore;
     private boolean rootGranted;
     private boolean probingRoot;
+    private boolean manualSyncAwaitingCompletion;
+    private boolean syncReceiverRegistered;
+    private String manualSyncRequestId = "";
     private Change pendingPermission;
 
     static boolean openProfileAfterRestore(Change change, boolean restored) {
@@ -169,6 +177,34 @@ public final class MainActivity extends AppCompatActivity {
         }
     };
     private final Runnable expireRefresh = this::refresh;
+    private final Runnable manualSyncConnectTimeout = () -> {
+        if (!manualSyncAwaitingCompletion) return;
+        finishManualSyncFeedback();
+        showStatus("连接仍在进行，稍后可在设备页查看同步结果。");
+    };
+    private final BroadcastReceiver manualSyncReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!manualSyncAwaitingCompletion) return;
+            String requestId = intent.getStringExtra(BandLiveService.EXTRA_SYNC_REQUEST_ID);
+            if (requestId == null || !requestId.equals(manualSyncRequestId)) return;
+            if (BandLiveService.ACTION_SYNC_ROUND_STARTED.equals(intent.getAction())) {
+                return;
+            }
+            if (BandLiveService.ACTION_SYNC_COMPLETED.equals(intent.getAction())) {
+                finishManualSyncFeedback();
+                showStatus("已与设备同步数据");
+                Toast.makeText(MainActivity.this, "已与设备同步数据", Toast.LENGTH_SHORT).show();
+                refreshDevice();
+                return;
+            }
+            if (BandLiveService.ACTION_SYNC_FAILED.equals(intent.getAction())) {
+                finishManualSyncFeedback();
+                String detail = Copy.healthCollection(
+                        intent.getStringExtra(BandLiveService.EXTRA_SYNC_ERROR));
+                showStatus(detail.isBlank() ? "同步中断，再试一次。" : detail);
+            }
+        }
+    };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -231,6 +267,12 @@ public final class MainActivity extends AppCompatActivity {
         getContentResolver().registerContentObserver(CredentialProvider.URI, false, observer);
         getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, deviceObserver);
         getContentResolver().registerContentObserver(HealthQueueProvider.URI, false, deviceObserver);
+        IntentFilter syncEvents = new IntentFilter();
+        syncEvents.addAction(BandLiveService.ACTION_SYNC_ROUND_STARTED);
+        syncEvents.addAction(BandLiveService.ACTION_SYNC_COMPLETED);
+        syncEvents.addAction(BandLiveService.ACTION_SYNC_FAILED);
+        registerReceiver(manualSyncReceiver, syncEvents, Context.RECEIVER_NOT_EXPORTED);
+        syncReceiverRegistered = true;
         refreshDevice();
         requestRoot();
     }
@@ -421,7 +463,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void syncNow() {
-        if (changingOwnership || probingRoot) return;
+        if (changingOwnership || probingRoot || manualSyncAwaitingCompletion) return;
         if (!new BandStateRepository(this).isRegistered()) {
             showSecondaryPage(setupPage, "首次设置", this::refreshDevice);
             return;
@@ -1073,6 +1115,11 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        finishManualSyncFeedback();
+        if (syncReceiverRegistered) {
+            unregisterReceiver(manualSyncReceiver);
+            syncReceiverRegistered = false;
+        }
         getContentResolver().unregisterContentObserver(observer);
         getContentResolver().unregisterContentObserver(deviceObserver);
         main.removeCallbacks(expireRefresh);
@@ -1280,9 +1327,10 @@ public final class MainActivity extends AppCompatActivity {
             showStatus("解锁手机后再管理设备。");
             return;
         }
+        String requestId = manualSync ? beginManualSyncFeedback() : "";
         changingOwnership = true;
         updateControls();
-        showStatus(manualSync ? "正在连接并立即同步…" : "正在处理，请稍候…");
+        showStatus(manualSync ? "正在连接并同步…" : "正在处理，请稍候…");
         worker.execute(() -> {
             OwnershipController owner = new OwnershipController(this);
             BandStateRepository repository = new BandStateRepository(this);
@@ -1307,11 +1355,11 @@ public final class MainActivity extends AppCompatActivity {
                     }
                     BandLiveService.start(this);
                     String accepted = manualSync
-                            ? BandLiveService.requestManualSync(this)
+                            ? BandLiveService.requestManualSync(this, requestId)
                             : BandLiveService.requestSync(this);
                     if (!"ACCEPTED".equals(accepted)) throw new IllegalStateException(accepted);
                     syncAccepted[0] = true;
-                    message = manualSync ? "正在连接并立即同步。" : "设备已登记，正在连接。";
+                    message = manualSync ? "正在连接并同步。" : "设备已登记，正在连接。";
                 } else {
                     if (change == Change.REMOVE) {
                         repository.unregisterDevice();
@@ -1347,6 +1395,7 @@ public final class MainActivity extends AppCompatActivity {
             main.post(() -> {
                 if (isDestroyed()) return;
                 changingOwnership = false;
+                if (manualSync && !syncAccepted[0]) finishManualSyncFeedback();
                 showStatus(visible);
                 updateControls();
                 refreshDevice();
@@ -1402,15 +1451,31 @@ public final class MainActivity extends AppCompatActivity {
             changeOwnership(Change.RECONNECT, true);
             return;
         }
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("立即同步健康记录？")
-                .setMessage("当前处于自定义睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
-                        + "导致睡眠图出现短暂清醒。是否仍要同步？")
-                .setNegativeButton("等待自动同步", (dialog, which) ->
-                        changeOwnership(Change.RECONNECT, false, true))
-                .setPositiveButton("仍然同步", (dialog, which) ->
-                        changeOwnership(Change.RECONNECT, true))
-                .show();
+        CouiConfirmDialog.show(this,
+                "立即同步健康记录？",
+                "当前处于自定义睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
+                        + "导致睡眠图出现短暂清醒。是否仍要同步？",
+                "等待自动同步",
+                "仍然同步",
+                color(R.color.accent),
+                null,
+                () -> changeOwnership(Change.RECONNECT, true));
+    }
+
+    private String beginManualSyncFeedback() {
+        manualSyncAwaitingCompletion = true;
+        manualSyncRequestId = UUID.randomUUID().toString();
+        if (screen != null) screen.setSyncActionSpinning(true);
+        main.removeCallbacks(manualSyncConnectTimeout);
+        main.postDelayed(manualSyncConnectTimeout, 120_000L);
+        return manualSyncRequestId;
+    }
+
+    private void finishManualSyncFeedback() {
+        manualSyncAwaitingCompletion = false;
+        manualSyncRequestId = "";
+        main.removeCallbacks(manualSyncConnectTimeout);
+        if (screen != null) screen.setSyncActionSpinning(false);
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {

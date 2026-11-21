@@ -281,6 +281,10 @@ public final class BridgeScreen {
         if (tabBar != null) tabBar.setRightActionVisible(visible);
     }
 
+    public void setSyncActionSpinning(boolean spinning) {
+        if (tabBar != null) tabBar.setRightActionSpinning(spinning);
+    }
+
     public void setTabBarVisible(boolean visible) {
         if (tabBarContainer == null) return;
         if (visible) {

@@ -9,6 +9,10 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.widget.FrameLayout
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets as ComposeWindowInsets
@@ -19,6 +23,7 @@ import androidx.compose.foundation.layout.tappableElement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +51,7 @@ import com.itos.coui.navigation.CouiNavigationItem
 import com.itos.coui.navigation.NavigationBar
 import com.itos.coui.theme.CouiTheme
 import org.xmlpull.v1.XmlPullParser
+import kotlin.math.abs
 
 /**
  * Android View host for the unmodified COUI [NavigationBar].
@@ -77,6 +83,7 @@ class CouiTabBarView @JvmOverloads constructor(
     private var rightActionLabel by mutableStateOf("")
     private var rightActionColor by mutableIntStateOf(android.graphics.Color.WHITE)
     private var rightContainerColor by mutableIntStateOf(android.graphics.Color.TRANSPARENT)
+    private var rightSpinning by mutableStateOf(false)
     private var contourEnabled by mutableStateOf(true)
     private var tooltipVisible by mutableStateOf(false)
     private var onRightActionClick: Runnable? = null
@@ -99,6 +106,37 @@ class CouiTabBarView @JvmOverloads constructor(
             val backdrop = rememberCouiBackdrop(drawSource = {
                 drawIntoCanvas { canvas -> canvas.nativeCanvas.drawRenderNode(backdropNode) }
             })
+            val rightRotation = remember { Animatable(0f) }
+            LaunchedEffect(rightSpinning) {
+                if (rightSpinning) {
+                    var firstTurn = true
+                    while (true) {
+                        rightRotation.animateTo(
+                            targetValue = rightRotation.value + 360f,
+                            animationSpec = tween(
+                                durationMillis = if (firstTurn) 680 else 900,
+                                easing = if (firstTurn) {
+                                    CubicBezierEasing(0.2f, 0f, 0.2f, 1f)
+                                } else {
+                                    LinearEasing
+                                },
+                            ),
+                        )
+                        firstTurn = false
+                    }
+                } else {
+                    val current = rightRotation.value
+                    val intoTurn = current % 360f
+                    val target = if (abs(intoTurn) < 0.01f) current else current + (360f - intoTurn)
+                    rightRotation.animateTo(
+                        targetValue = target,
+                        animationSpec = tween(
+                            durationMillis = 520,
+                            easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
+                        ),
+                    )
+                }
+            }
             CompositionLocalProvider(LocalCouiContourGlowEnabled provides contourEnabled) {
                 CouiTheme {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
@@ -128,6 +166,7 @@ class CouiTabBarView @JvmOverloads constructor(
                                 onRightClick = { onRightActionClick?.run() },
                                 rightContainerColor = Color(rightContainerColor),
                                 rightIconColor = Color(rightActionColor),
+                                rightIconRotationZ = rightRotation.value,
                                 onSelection = { next ->
                                     val tab = currentTabs.getOrNull(next) ?: return@NavigationBar
                                     selectedIndex = next
@@ -178,6 +217,10 @@ class CouiTabBarView @JvmOverloads constructor(
     fun setRightActionVisible(visible: Boolean) {
         rightActionShown = visible
         if (!visible) tooltipVisible = false
+    }
+
+    fun setRightActionSpinning(spinning: Boolean) {
+        rightSpinning = spinning
     }
 
     fun setOnRightActionClickListener(listener: Runnable?) {
