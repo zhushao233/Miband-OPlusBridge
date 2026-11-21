@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.service;
 
+import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -69,6 +70,7 @@ public final class BandLiveServiceSleepPolicyTest {
         assertTrue(evidence.observed());
         evidence.reset();
         assertFalse(evidence.observed());
+        assertFalse(evidence.acceptsClosedInterval(System.currentTimeMillis()));
     }
 
     @Test public void nightAwakeNeedsTwoConsecutiveSamples() {
@@ -92,6 +94,11 @@ public final class BandLiveServiceSleepPolicyTest {
         assertTrue(BandLiveService.shouldPollSleepState(3, true));
         assertFalse(BandLiveService.shouldPollSleepState(10, true));
         assertFalse(BandLiveService.shouldPollSleepState(23, false));
+
+        var custom = new SleepProtectionSchedule.Window(22 * 60, 6 * 60);
+        assertTrue(BandLiveService.shouldPollSleepState(custom, 10 * 60, true));
+        assertFalse(BandLiveService.shouldPollSleepState(custom, 15 * 60, true));
+        assertFalse(BandLiveService.shouldPollSleepState(custom, 10 * 60, false));
     }
 
     @Test public void lateWakeRequiresEvidenceBeforeTheHardEnd() {

@@ -19,8 +19,11 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
 import android.provider.Settings;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -28,6 +31,7 @@ import android.widget.Toast;
 import androidx.activity.BackEventCompat;
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.AppCompatEditText;
 import androidx.core.content.ContextCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.hchen.himiuix.MiuixBasicView;
@@ -42,6 +46,7 @@ import io.github.miam1ku.mibandoplusbridge.integration.DeviceCardProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
 import io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener;
 import io.github.miam1ku.mibandoplusbridge.notify.SleepMusic;
+import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
 import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
@@ -51,6 +56,7 @@ import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.StepState;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen.Tone;
 import io.github.miam1ku.mibandoplusbridge.ui.Copy;
 import io.github.miam1ku.mibandoplusbridge.ui.SetupProgress;
+import io.github.miam1ku.mibandoplusbridge.ui.SleepWindowSlider;
 import io.github.miam1ku.mibandoplusbridge.ui.UiStyle;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -83,6 +89,7 @@ public final class MainActivity extends AppCompatActivity {
     private BridgeScreen debugPage;
     private BridgeScreen permissionsPage;
     private BridgeScreen appearancePage;
+    private BridgeScreen sleepProtectionPage;
     private BridgeScreen aboutPage;
     private int currentTabId = R.id.tab_device;
     private boolean secondaryPage;
@@ -119,6 +126,12 @@ public final class MainActivity extends AppCompatActivity {
     private MiuixBasicView deviceDetailRow;
     private MiuixBasicView appearanceRow;
     private MiuixBasicView permissionRow;
+    private MiuixBasicView sleepProtectionRow;
+    private SleepWindowSlider sleepProtectionSlider;
+    private AppCompatEditText sleepStartInput;
+    private AppCompatEditText sleepEndInput;
+    private TextView sleepProtectionInputHint;
+    private boolean syncingSleepInputs;
 
     private LinearLayout bonded;
     private TextView bindingStatus;
@@ -170,6 +183,7 @@ public final class MainActivity extends AppCompatActivity {
         debugPage = screen.page();
         permissionsPage = screen.page();
         appearancePage = screen.page();
+        sleepProtectionPage = screen.page();
         aboutPage = screen.page();
 
         buildDeviceTab();
@@ -180,6 +194,7 @@ public final class MainActivity extends AppCompatActivity {
         buildDebugPage();
         buildPermissionsPage();
         buildAppearancePage();
+        buildSleepProtectionPage();
         buildAboutPage();
 
         if (state != null) {
@@ -546,6 +561,14 @@ public final class MainActivity extends AppCompatActivity {
         appearanceRow.setIcon(rowIcon(R.drawable.ic_appearance));
         appearanceRow.setSummary(Copy.SETTINGS_THEME_SUMMARY);
 
+        settingsPage.heading(Copy.SETTINGS_SLEEP_SYNC);
+        LinearLayout sleepProtection = settingsPage.card();
+        sleepProtectionRow = settingsPage.navRow(sleepProtection, Copy.SLEEP_PROTECTION, () -> {
+            refreshSleepProtectionControls(SleepProtectionSchedule.load(this));
+            showSecondaryPage(sleepProtectionPage, Copy.SLEEP_PROTECTION, this::refreshSettingsRows);
+        });
+        sleepProtectionRow.setIcon(rowIcon(R.drawable.ic_sleep));
+
         settingsPage.heading(Copy.SETTINGS_PERMISSIONS);
         LinearLayout permissions = settingsPage.card();
         permissionRow = settingsPage.navRow(permissions, Copy.SETTINGS_PERMISSION_ROW, () -> {
@@ -585,6 +608,10 @@ public final class MainActivity extends AppCompatActivity {
     private void refreshSettingsRows() {
         if (appearanceRow == null) return;
         appearanceRow.setSummary(Copy.SETTINGS_THEME_SUMMARY);
+        if (sleepProtectionRow != null) {
+            sleepProtectionRow.setSummary(Copy.sleepProtectionSummary(
+                    SleepProtectionSchedule.load(this)));
+        }
     }
 
     private void confirmRestore() {
@@ -831,6 +858,152 @@ public final class MainActivity extends AppCompatActivity {
             return true;
         });
         appearancePage.caption(Copy.EFFECTS_APPLIED);
+    }
+
+    // ---- sleep protection page ----
+
+    private void buildSleepProtectionPage() {
+        LinearLayout intro = sleepProtectionPage.noticeCard(Tone.ACTIVE);
+        sleepProtectionPage.title(intro, Copy.SLEEP_PROTECTION);
+        sleepProtectionPage.bodyText(intro, Copy.SLEEP_PROTECTION_CAPTION);
+
+        sleepProtectionPage.heading(Copy.SLEEP_PROTECTION_RANGE);
+        LinearLayout windowCard = sleepProtectionPage.card();
+
+        sleepProtectionSlider = new SleepWindowSlider(this);
+        addWithMargins(windowCard, sleepProtectionSlider, 8, 4, 8, 0);
+        sleepProtectionSlider.setOnRangeChangedListener((start, end, fromUser) -> {
+            if (!fromUser) return;
+            SleepProtectionSchedule.Window window = new SleepProtectionSchedule.Window(start, end);
+            setSleepProtectionInputs(window);
+            showSleepProtectionHint(Copy.sleepProtectionDuration(window), false);
+        });
+
+        LinearLayout inputs = new LinearLayout(this);
+        inputs.setOrientation(LinearLayout.HORIZONTAL);
+        addWithMargins(windowCard, inputs, 16, 2, 16, 8);
+
+        sleepStartInput = sleepTimeInput();
+        sleepEndInput = sleepTimeInput();
+        addSleepTimeField(inputs, Copy.SLEEP_PROTECTION_START, sleepStartInput, 0, 6);
+        addSleepTimeField(inputs, Copy.SLEEP_PROTECTION_END, sleepEndInput, 6, 0);
+
+        sleepProtectionInputHint = sleepProtectionPage.caption(windowCard, "");
+        sleepProtectionPage.filled(windowCard, Copy.SLEEP_PROTECTION_SAVE,
+                this::saveSleepProtection);
+        sleepProtectionPage.caption(
+                "开始时刻可以晚于结束时刻，跨午夜时段会按同一段睡眠计算。");
+
+        refreshSleepProtectionControls(SleepProtectionSchedule.load(this));
+    }
+
+    private AppCompatEditText sleepTimeInput() {
+        AppCompatEditText input = new AppCompatEditText(this);
+        input.setHint(Copy.SLEEP_PROTECTION_INPUT_HINT);
+        input.setInputType(InputType.TYPE_CLASS_DATETIME | InputType.TYPE_DATETIME_VARIATION_TIME);
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        input.setGravity(Gravity.CENTER);
+        input.setTextSize(18);
+        input.setTextColor(color(R.color.on_surface));
+        input.setHintTextColor(color(R.color.on_surface_variant));
+        input.setPadding(dp(10), dp(10), dp(10), dp(10));
+        input.setBackground(BridgeScreen.roundedRect(
+                color(R.color.surface_variant), dp(12), 0, 0));
+        input.setOnFocusChangeListener((view, focused) -> {
+            if (!focused) applySleepProtectionInputs();
+        });
+        input.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId != EditorInfo.IME_ACTION_DONE) return false;
+            applySleepProtectionInputs();
+            view.clearFocus();
+            InputMethodManager keyboard = getSystemService(InputMethodManager.class);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(view.getWindowToken(), 0);
+            return true;
+        });
+        return input;
+    }
+
+    private void addSleepTimeField(LinearLayout row, String label, AppCompatEditText input,
+                                   int left, int right) {
+        LinearLayout field = new LinearLayout(this);
+        field.setOrientation(LinearLayout.VERTICAL);
+        TextView name = text(13, R.color.on_surface_variant, true);
+        name.setText(label);
+        field.addView(name, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(-1, dp(48));
+        inputParams.topMargin = dp(6);
+        field.addView(input, inputParams);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1f);
+        params.leftMargin = dp(left);
+        params.rightMargin = dp(right);
+        row.addView(field, params);
+    }
+
+    private void refreshSleepProtectionControls(SleepProtectionSchedule.Window window) {
+        if (sleepProtectionSlider == null) return;
+        sleepProtectionSlider.setRange(window.startMinute(), window.endMinute());
+        setSleepProtectionInputs(window);
+        showSleepProtectionHint(Copy.sleepProtectionDuration(window), false);
+    }
+
+    private void setSleepProtectionInputs(SleepProtectionSchedule.Window window) {
+        syncingSleepInputs = true;
+        try {
+            if (sleepStartInput != null) sleepStartInput.setText(window.startLabel());
+            if (sleepEndInput != null) sleepEndInput.setText(window.endLabel());
+        } finally {
+            syncingSleepInputs = false;
+        }
+    }
+
+    private SleepProtectionSchedule.Window readSleepProtectionInputs() {
+        if (syncingSleepInputs || sleepStartInput == null || sleepEndInput == null) return null;
+        Integer start = SleepProtectionSchedule.parseHour(
+                sleepStartInput.getText() == null ? "" : sleepStartInput.getText().toString());
+        Integer end = SleepProtectionSchedule.parseHour(
+                sleepEndInput.getText() == null ? "" : sleepEndInput.getText().toString());
+        if (start == null || end == null) {
+            showSleepProtectionHint(Copy.SLEEP_PROTECTION_INPUT_INVALID, true);
+            return null;
+        }
+        SleepProtectionSchedule.Window window = new SleepProtectionSchedule.Window(start, end);
+        if (window.durationMinutes() < SleepProtectionSchedule.MIN_DURATION_MINUTES) {
+            showSleepProtectionHint(Copy.SLEEP_PROTECTION_TOO_SHORT, true);
+            return null;
+        }
+        return window;
+    }
+
+    private void applySleepProtectionInputs() {
+        SleepProtectionSchedule.Window window = readSleepProtectionInputs();
+        if (window == null) return;
+        sleepProtectionSlider.setRange(window.startMinute(), window.endMinute());
+        setSleepProtectionInputs(window);
+        showSleepProtectionHint(Copy.sleepProtectionDuration(window), false);
+    }
+
+    private void saveSleepProtection() {
+        SleepProtectionSchedule.Window window = readSleepProtectionInputs();
+        if (window == null) return;
+        if (!SleepProtectionSchedule.save(this, window)) {
+            showSleepProtectionHint(Copy.SLEEP_PROTECTION_SAVE_INTERRUPTED, true);
+            return;
+        }
+        sleepProtectionSlider.setRange(window.startMinute(), window.endMinute());
+        setSleepProtectionInputs(window);
+        showSleepProtectionHint(Copy.SLEEP_PROTECTION_SAVED, false);
+        refreshSettingsRows();
+        BandLiveService.sleepProtectionChanged(this);
+        Toast.makeText(this, Copy.SLEEP_PROTECTION_SAVED, Toast.LENGTH_SHORT).show();
+    }
+
+    private void showSleepProtectionHint(String message, boolean attention) {
+        if (sleepProtectionInputHint == null) return;
+        sleepProtectionInputHint.setText(message);
+        sleepProtectionPage.setTone(sleepProtectionInputHint,
+                attention ? Tone.ATTENTION : Tone.ACTIVE);
     }
 
     // ---- about page ----
@@ -1223,13 +1396,15 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void confirmManualSync() {
-        if (!BandLiveService.isSleepProtectionWindow(java.time.LocalTime.now().getHour())) {
+        java.time.LocalTime now = java.time.LocalTime.now();
+        int minuteOfDay = now.getHour() * 60 + now.getMinute();
+        if (!BandLiveService.isSleepProtectionWindow(this, minuteOfDay)) {
             changeOwnership(Change.RECONNECT, true);
             return;
         }
         new MaterialAlertDialogBuilder(this)
                 .setTitle("立即同步健康记录？")
-                .setMessage("当前处于睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
+                .setMessage("当前处于自定义睡眠保护时段。立即同步可能结束手环当前的睡眠文件，"
                         + "导致睡眠图出现短暂清醒。是否仍要同步？")
                 .setNegativeButton("等待自动同步", (dialog, which) ->
                         changeOwnership(Change.RECONNECT, false, true))

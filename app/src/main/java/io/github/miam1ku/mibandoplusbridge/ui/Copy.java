@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.ui;
 
+import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
+
 /**
  * User-facing copy shared by the module UI.
  * Style: say what the state is, then what to tap next. {@code CopyStyleTest} checks the wording.
@@ -20,6 +22,24 @@ public final class Copy {
     public static final String SETTINGS_PERMISSIONS = "应用权限";
     public static final String SETTINGS_PERMISSION_ROW = "权限与后台";
     public static final String SETTINGS_PERMISSION_SUMMARY = "附近设备、自启动与关联启动";
+    public static final String SETTINGS_SLEEP_SYNC = "睡眠同步";
+    public static final String SLEEP_PROTECTION = "睡眠保护时段";
+    public static final String SLEEP_PROTECTION_CAPTION =
+            "按照日常睡眠习惯设置大约入睡和起床时刻。";
+    public static final String SLEEP_PROTECTION_RANGE = "核心睡眠时段";
+    public static final String SLEEP_PROTECTION_START = "开始";
+    public static final String SLEEP_PROTECTION_END = "结束";
+    public static final String SLEEP_PROTECTION_INPUT_HINT = "23:00";
+    public static final String SLEEP_PROTECTION_INPUT_INVALID =
+            "按 HH:00 输入整点时刻，调整后再保存。";
+    public static final String SLEEP_PROTECTION_TOO_SHORT =
+            "开始与结束时刻至少相隔 4 小时，调整后再保存。";
+    public static final String SLEEP_PROTECTION_SAVE = "保存保护时段";
+    public static final String SLEEP_PROTECTION_SAVED =
+            "保护时段已保存，运行中的服务会立即使用新设置。";
+    public static final String SLEEP_PROTECTION_SAVE_INTERRUPTED =
+            "保护时段保存中断，再点一次即可。";
+    public static final String SLEEP_PROTECTION_SLIDER_DESC = "睡眠保护开始与结束时间";
     public static final String SETTINGS_ADVANCED = "高级";
     public static final String SETTINGS_BINDING = "绑定与设备信息";
     public static final String SETTINGS_BINDING_SUMMARY = "重新导入、设备选择与管理";
@@ -32,7 +52,7 @@ public final class Copy {
 
     public static final String EFFECTS_TITLE = "凝光视效";
     public static final String EFFECTS_CAPTION =
-            "控制底栏、返回按钮等 COUI 组件的轮廓高光与内光晕，模糊和投影保持原样。";
+            "控制底栏、返回按钮等界面轮廓高光与内光晕，模糊和投影保持原样。";
     public static final String CONTOUR_TITLE = "轮廓光";
     public static final String CONTOUR_CAPTION = "关闭后保留组件材质，只隐藏描边与内光晕。";
     public static final String CONTOUR_SAVE_INTERRUPTED = "轮廓光设置保存中断，再试一次";
@@ -68,6 +88,23 @@ public final class Copy {
     public static final String ACTION_RESTORE = "恢复";
     public static final String ACTION_REMOVE = "移除";
 
+    public static String sleepProtectionSummary(SleepProtectionSchedule.Window window) {
+        return window.startLabel() + "–" + window.endLabel() + " · 自定义保护时段";
+    }
+
+    public static String sleepProtectionDuration(SleepProtectionSchedule.Window window) {
+        int total = window.durationMinutes();
+        int hours = total / 60;
+        int minutes = total % 60;
+        return minutes == 0
+                ? "保护时长 " + hours + " 小时"
+                : "保护时长 " + hours + " 小时 " + minutes + " 分";
+    }
+
+    public static String sleepProtectionSliderDesc(SleepProtectionSchedule.Window window) {
+        return "睡眠保护 " + window.startLabel() + " 到 " + window.endLabel();
+    }
+
     // ---- setup ----
 
     public static String setupLabel(SetupProgress.Step step) {
@@ -82,7 +119,7 @@ public final class Copy {
 
     public static String setupHint(SetupProgress.Step step) {
         return switch (step) {
-            case ROOT -> "在 KernelSU 中为「小米手环桥接」打开超级用户，回到这里点「检查 Root」。";
+            case ROOT -> "在 Root 管理器中为「小米手环桥接」打开超级用户，回到这里点「检查 Root」。";
             case IMPORT -> "从小米运动健康的本地数据库读取手环密钥，全程在本机完成。";
             case PROFILE -> "绑定已保存，点「添加到健康」即可连接。";
             case ADD -> "小米运动健康会暂停，由桥接接管手环。手环离线时也可以先添加。";
@@ -135,7 +172,7 @@ public final class Copy {
             case "DEVICE_IDENTITY_CHANGED" -> "这次导入的是另一只手环。请导入原来那只，或先移除再添加新手环。";
             case "BAND_STATE_STORAGE_FAILED", "OWNERSHIP_STORAGE_FAILED" -> "清理一些存储空间后再点一次。";
             case "ROOT_REQUIRED", "ROOT_ACTION_FAILED", "ROOT_ACTION_TIMEOUT" ->
-                    "在 KernelSU 中确认已允许本应用，再点一次。";
+                    "在 Root 管理器中确认已允许本应用，再点一次。";
             case "HOST_VERSION_UNSUPPORTED" -> "请把小米运动健康换到实测版本 3.59.1 后再试。";
             case "NEARBY_PERMISSION_REQUIRED" -> "授权附近设备后再点一次。";
             case "DEVICE_NOT_REGISTERED" -> "先点「添加到健康」。";
