@@ -1458,6 +1458,7 @@ public final class MainActivity extends AppCompatActivity {
                 "等待自动同步",
                 "仍然同步",
                 color(R.color.accent),
+                UiStyle.contourGlow(this),
                 null,
                 () -> changeOwnership(Change.RECONNECT, true));
     }

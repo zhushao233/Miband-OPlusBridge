@@ -147,26 +147,26 @@ public final class SleepWindowSlider extends View {
         float gap = dp(6);
         float startWidth = bubbleWidth(startLabel);
         float endWidth = bubbleWidth(endLabel);
-        float startCenter = clamp(startX, left + startWidth / 2, right - startWidth / 2);
-        float endCenter = clamp(endX, left + endWidth / 2, right - endWidth / 2);
+        boolean reversed = startX > endX;
+        String leftLabel = reversed ? endLabel : startLabel;
+        String rightLabel = reversed ? startLabel : endLabel;
+        float leftWidth = reversed ? endWidth : startWidth;
+        float rightWidth = reversed ? startWidth : endWidth;
+        float leftHandleX = reversed ? endX : startX;
+        float rightHandleX = reversed ? startX : endX;
+        float leftCenter = clamp(leftHandleX, left + leftWidth / 2, right - leftWidth / 2);
+        float rightCenter = clamp(rightHandleX, left + rightWidth / 2, right - rightWidth / 2);
 
-        float startLeft = startCenter - startWidth / 2;
-        float startRight = startCenter + startWidth / 2;
-        float endLeft = endCenter - endWidth / 2;
-        float endRight = endCenter + endWidth / 2;
-        if (startRight + gap > endLeft) {
-            float overlap = (startRight + gap - endLeft) / 2f;
-            startLeft = clamp(startLeft - overlap, left, right - startWidth);
-            startRight = startLeft + startWidth;
-            endLeft = clamp(endLeft + overlap, left, right - endWidth);
-            endRight = endLeft + endWidth;
-            if (startRight + gap > endLeft) {
-                startLeft = clamp(endLeft - gap - startWidth, left, right - startWidth);
-                startRight = startLeft + startWidth;
-            }
+        float leftBubble = leftCenter - leftWidth / 2;
+        float rightBubble = rightCenter - rightWidth / 2;
+        if (leftBubble + leftWidth + gap > rightBubble) {
+            float pairWidth = leftWidth + gap + rightWidth;
+            leftBubble = clamp((leftCenter + rightCenter - pairWidth) / 2f,
+                    left, right - pairWidth);
+            rightBubble = leftBubble + leftWidth + gap;
         }
-        drawBubble(canvas, startLeft, dp(8), startWidth, height, startX, startLabel);
-        drawBubble(canvas, endLeft, dp(8), endWidth, height, endX, endLabel);
+        drawBubble(canvas, leftBubble, dp(8), leftWidth, height, leftHandleX, leftLabel);
+        drawBubble(canvas, rightBubble, dp(8), rightWidth, height, rightHandleX, rightLabel);
     }
 
     private void drawBubble(Canvas canvas, float left, float top, float width, float height,
