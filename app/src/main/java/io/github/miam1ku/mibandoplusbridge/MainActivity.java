@@ -657,12 +657,15 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void confirmRestore() {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(Copy.RESTORE_MI_HEALTH_CONFIRM)
-                .setMessage(Copy.RESTORE_MI_HEALTH_MESSAGE)
-                .setNegativeButton(Copy.ACTION_CANCEL, null)
-                .setPositiveButton(Copy.ACTION_RESTORE, (dialog, which) -> changeOwnership(Change.RESTORE))
-                .show();
+        CouiConfirmDialog.show(this,
+                Copy.RESTORE_MI_HEALTH_CONFIRM,
+                Copy.RESTORE_MI_HEALTH_MESSAGE,
+                Copy.ACTION_CANCEL,
+                Copy.ACTION_RESTORE,
+                color(R.color.accent),
+                UiStyle.contourGlow(this),
+                null,
+                () -> changeOwnership(Change.RESTORE));
     }
 
     // ---- setup page ----
@@ -721,12 +724,15 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout manage = bindingPage.card();
         bindingRestore = bindingPage.outlined(manage, Copy.RESTORE_MI_HEALTH, this::confirmRestore);
         bindingRemove = bindingPage.dangerOutlined(manage, Copy.REMOVE_FROM_HEALTH, () ->
-                new MaterialAlertDialogBuilder(this)
-                        .setTitle(Copy.REMOVE_FROM_HEALTH_CONFIRM)
-                        .setMessage(Copy.REMOVE_FROM_HEALTH_MESSAGE)
-                        .setNegativeButton(Copy.ACTION_CANCEL, null)
-                        .setPositiveButton(Copy.ACTION_REMOVE, (dialog, which) -> changeOwnership(Change.REMOVE))
-                        .show());
+                CouiConfirmDialog.show(this,
+                        Copy.REMOVE_FROM_HEALTH_CONFIRM,
+                        Copy.REMOVE_FROM_HEALTH_MESSAGE,
+                        Copy.ACTION_CANCEL,
+                        Copy.ACTION_REMOVE,
+                        color(R.color.error),
+                        UiStyle.contourGlow(this),
+                        null,
+                        () -> changeOwnership(Change.REMOVE)));
         bindingPage.caption(manage, Copy.BINDING_MANAGEMENT_CAPTION);
 
         bindingPage.heading(Copy.BINDING_IMPORT_TITLE);
@@ -1435,13 +1441,16 @@ public final class MainActivity extends AppCompatActivity {
             confirmManualSync();
             return;
         }
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("添加到健康并接管？")
-                .setMessage("小米运动健康会暂停，由桥接接管手环。开始前请结束表盘安装、OTA 升级和 NFC 操作。"
-                        + "绑定和健康历史都会保留。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("添加并接管", (dialog, which) -> changeOwnership(change))
-                .show();
+        CouiConfirmDialog.show(this,
+                "添加到健康并接管？",
+                "小米运动健康会暂停，由桥接接管手环。开始前请结束表盘安装、OTA 升级和 NFC 操作。"
+                        + "绑定和健康历史都会保留。",
+                Copy.ACTION_CANCEL,
+                "添加并接管",
+                color(R.color.accent),
+                UiStyle.contourGlow(this),
+                null,
+                () -> changeOwnership(change));
     }
 
     private void confirmManualSync() {
