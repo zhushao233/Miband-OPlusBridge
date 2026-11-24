@@ -429,6 +429,40 @@ public final class BandLiveService extends Service {
         } catch (java.util.concurrent.RejectedExecutionException stopping) { }
     }
 
+    /** Sends the current phone time together with the user's selected 12/24-hour display. */
+    public static java.util.concurrent.CompletionStage<Void> requestClockFormat(
+            Context context, boolean use12Hour) {
+        return sendBandSetting(context, io.github.miam1ku.mibandoplusbridge.protocol.BandClockCommand.at(
+                java.time.Instant.now(), java.time.ZoneId.systemDefault(), !use12Hour));
+    }
+
+    /** Sends the selected Xiaomi locale; saved settings are replayed after the next authentication. */
+    public static java.util.concurrent.CompletionStage<Void> requestLanguage(Context context, String locale) {
+        return sendBandSetting(context,
+                io.github.miam1ku.mibandoplusbridge.protocol.BandLanguageCommand.setLanguage(locale));
+    }
+
+    private static java.util.concurrent.CompletionStage<Void> sendBandSetting(
+            Context context,
+            nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
+        String blocked = ownershipBlocker(context);
+        if (blocked != null) {
+            return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException(blocked));
+        }
+        BandLiveService live = instance;
+        var queue = live == null || live.stopRequested ? null : live.commands;
+        if (queue == null) {
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("LIVE_SESSION_REQUIRED"));
+        }
+        return queue.send(command).whenComplete((ignored, error) -> {
+            if (error != null) {
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
+                        "BAND_SETTING failed type=" + command.getType() + " subtype=" + command.getSubtype());
+            }
+        });
+    }
+
     public static java.util.concurrent.CompletionStage<Void> requestWeather(Context context,
             io.github.miam1ku.mibandoplusbridge.protocol.BandWeatherEncoder.Sample sample, boolean inspect) {
         BandLiveService live = instance;

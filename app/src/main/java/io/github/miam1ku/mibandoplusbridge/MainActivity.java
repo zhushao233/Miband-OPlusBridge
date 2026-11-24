@@ -556,7 +556,6 @@ public final class MainActivity extends AppCompatActivity {
     // ---- tools tab ----
 
     private void buildToolsTab() {
-        toolsPage.heading("快捷入口");
         LinearLayout links = toolsPage.card();
         deviceDetailRow = toolsPage.navRow(links, "设备详情",
                 () -> startActivity(new Intent().setClassName(this,

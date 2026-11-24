@@ -13,11 +13,16 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import com.itos.coui.host.CouiMenuRowView;
+import io.github.miam1ku.mibandoplusbridge.data.BandDisplaySettings;
+import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen;
+import io.github.miam1ku.mibandoplusbridge.ui.UiStyle;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import io.github.miam1ku.mibandoplusbridge.data.BandCatalog;
@@ -85,6 +90,39 @@ public final class BandDetailsActivity extends AppCompatActivity {
         history = screen.caption(statusCard, "");
         sleepFragments = screen.caption(statusCard, "");
         sleepFragments.setVisibility(View.GONE);
+
+        screen.heading("手环设置");
+        LinearLayout display = screen.card();
+        BridgeScreen.ToggleRow clockFormat = screen.switchRow(display, "12 小时制",
+                "开启后手环以 12 小时制显示时间，关闭则使用 24 小时制。");
+        clockFormat.setChecked(BandDisplaySettings.use12Hour(this));
+        clockFormat.setOnStateChangeListener(enabled -> {
+            if (!BandDisplaySettings.saveUse12Hour(this, enabled)) {
+                Toast.makeText(this, "时间显示设置保存中断，再拨一次即可。", Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            reportBandSetting(BandLiveService.requestClockFormat(this, enabled),
+                    enabled ? "手环已切换为 12 小时制" : "手环已切换为 24 小时制");
+            return true;
+        });
+        CouiMenuRowView language = new CouiMenuRowView(this);
+        language.setTitle("手环语言");
+        language.setSummary("修改手环系统语言；国行固件通常支持简体中文和 English。");
+        language.setItems(new String[]{BandDisplaySettings.CHINESE, BandDisplaySettings.ENGLISH},
+                new String[]{"简体中文", "English"});
+        language.setSelectedValue(BandDisplaySettings.language(this));
+        language.setContourGlowEnabled(UiStyle.contourGlow(this));
+        language.setOnValueSelectedListener(locale -> {
+            if (!BandDisplaySettings.saveLanguage(this, locale)) {
+                Toast.makeText(this, "手环语言设置保存中断，再选一次即可。", Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            reportBandSetting(BandLiveService.requestLanguage(this, locale),
+                    "手环语言已切换为" + BandDisplaySettings.languageLabel(locale));
+            return true;
+        });
+        display.addView(language, new LinearLayout.LayoutParams(-1, -2));
+
         LinearLayout links = screen.card();
         screen.navRow(links, "打开 OPPO 健康", () -> openPackage(OHEALTH));
         screen.navRow(links, "打开 KernelSU", () -> openPackage(KERNELSU));
@@ -131,6 +169,14 @@ public final class BandDetailsActivity extends AppCompatActivity {
         getContentResolver().registerContentObserver(HealthQueueProvider.RECORDS_URI, true, historyObserver);
         getContentResolver().registerContentObserver(HealthQueueProvider.STEP_REVIEWS_URI, false, stepReviewObserver);
         refresh();
+    }
+
+    private void reportBandSetting(CompletionStage<Void> delivery, String success) {
+        delivery.whenComplete((ignored, error) -> main.post(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            Toast.makeText(this, error == null ? success : "设置已保存，连接手环后生效",
+                    Toast.LENGTH_SHORT).show();
+        }));
     }
 
     @Override protected void onResume() {

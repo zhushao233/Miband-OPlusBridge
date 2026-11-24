@@ -997,6 +997,7 @@ public final class BridgeScreen {
             copy.addView(summaryView, summaryParams);
 
             toggle = new CouiSwitchView(context);
+            toggle.setContourGlowEnabled(UiStyle.contourGlow(context));
             LayoutParams toggleParams = new LayoutParams(-2, -2);
             toggleParams.leftMargin = dp(context, 14);
             addView(toggle, toggleParams);

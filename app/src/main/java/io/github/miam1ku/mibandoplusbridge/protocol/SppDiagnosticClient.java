@@ -9,8 +9,8 @@ import android.bluetooth.BluetoothSocket;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
-import android.text.format.DateFormat;
 import com.google.protobuf.ByteString;
+import io.github.miam1ku.mibandoplusbridge.data.BandDisplaySettings;
 import io.github.miam1ku.mibandoplusbridge.data.MiProductImage;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.data.BindingStore;
@@ -357,6 +357,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
             var batteryResponse = awaitCommand(2, 1);
             var battery = readBattery(batteryResponse);
             sendObservedClock();
+            sendConfiguredLanguage();
             if (weather != null) {
                 if (inspectCities) {
                     inspectWeatherCities(weather);
@@ -1094,9 +1095,17 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private void sendObservedClock() throws Exception {
         int clockAck = sentSequence;
         sendCommand(BandClockCommand.at(Instant.now(), ZoneId.systemDefault(),
-                DateFormat.is24HourFormat(context)));
+                !BandDisplaySettings.use12Hour(context)));
         awaitTransportAck(clockAck);
         progress.accept("CLOCK_ACKED");
+    }
+
+    private void sendConfiguredLanguage() throws Exception {
+        String locale = BandDisplaySettings.savedLanguage(context);
+        if (locale.isEmpty()) return;
+        int languageAck = sentSequence;
+        sendCommand(BandLanguageCommand.setLanguage(locale));
+        awaitTransportAck(languageAck);
     }
 
     private void awaitTransportAck(int sequence) throws Exception {
