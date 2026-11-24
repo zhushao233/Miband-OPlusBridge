@@ -11,6 +11,8 @@ public final class BandLanguageCommandTest {
         assertEquals(2, command.getType());
         assertEquals(6, command.getSubtype());
         assertEquals("en_US", command.getSystem().getLanguage().getCode());
+        assertEquals("zh_TW", BandLanguageCommand.setLanguage("zh_TW")
+                .getSystem().getLanguage().getCode());
     }
 
     @Test public void blankLanguageIsRejected() {

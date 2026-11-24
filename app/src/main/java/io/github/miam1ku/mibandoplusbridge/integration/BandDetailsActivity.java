@@ -107,9 +107,10 @@ public final class BandDetailsActivity extends AppCompatActivity {
         });
         CouiMenuRowView language = new CouiMenuRowView(this);
         language.setTitle("手环语言");
-        language.setSummary("修改手环系统语言；国行固件通常支持简体中文和 English。");
-        language.setItems(new String[]{BandDisplaySettings.CHINESE, BandDisplaySettings.ENGLISH},
-                new String[]{"简体中文", "English"});
+        language.setSummary("修改手环系统语言；国行固件通常支持简体中文、繁體中文和 English。");
+        language.setItems(new String[]{BandDisplaySettings.CHINESE,
+                        BandDisplaySettings.TRADITIONAL_CHINESE, BandDisplaySettings.ENGLISH},
+                new String[]{"简体中文", "繁體中文", "English"});
         language.setSelectedValue(BandDisplaySettings.language(this));
         language.setContourGlowEnabled(UiStyle.contourGlow(this));
         language.setOnValueSelectedListener(locale -> {

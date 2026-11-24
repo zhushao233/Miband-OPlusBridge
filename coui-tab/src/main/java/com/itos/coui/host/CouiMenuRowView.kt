@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.itos.coui.effect.LocalCouiContourGlowEnabled
 import com.itos.coui.menu.CouiMenuItem
 import com.itos.coui.menu.Menu
+import com.itos.coui.menu.ProvideCouiMenuBackdrop
 import com.itos.coui.menu.couiMenuAnchor
 import com.itos.coui.menu.rememberCouiMenuAnchor
 import com.itos.coui.text.CouiTextKind
@@ -81,61 +82,63 @@ class CouiMenuRowView @JvmOverloads constructor(
                 LocalCouiContourGlowEnabled provides contourEnabled,
             ) {
                 CouiTheme(darkTheme = dark) {
-                    Box {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .defaultMinSize(minHeight = 64.dp)
-                                .couiMenuAnchor(anchor)
-                                .semantics(mergeDescendants = true) {}
-                                .clickable(role = Role.DropdownList) {
-                                    anchor.open { expanded = true }
-                                }
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                CouiText(
-                                    text = titleState,
-                                    kind = CouiTextKind.ItemTitle,
-                                    color = colors.onSurface,
-                                )
-                                if (summaryState.isNotEmpty()) {
-                                    Spacer(Modifier.height(2.dp))
+                    ProvideCouiMenuBackdrop { backdropModifier ->
+                        Box(backdropModifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .defaultMinSize(minHeight = 64.dp)
+                                    .couiMenuAnchor(anchor)
+                                    .semantics(mergeDescendants = true) {}
+                                    .clickable(role = Role.DropdownList) {
+                                        anchor.open { expanded = true }
+                                    }
+                                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
                                     CouiText(
-                                        text = summaryState,
-                                        kind = CouiTextKind.ItemSummary,
-                                        color = colors.onSurfaceVariant,
+                                        text = titleState,
+                                        kind = CouiTextKind.ItemTitle,
+                                        color = colors.onSurface,
                                     )
+                                    if (summaryState.isNotEmpty()) {
+                                        Spacer(Modifier.height(2.dp))
+                                        CouiText(
+                                            text = summaryState,
+                                            kind = CouiTextKind.ItemSummary,
+                                            color = colors.onSurfaceVariant,
+                                        )
+                                    }
                                 }
+                                CouiText(
+                                    text = selectedLabel,
+                                    kind = CouiTextKind.ItemValue,
+                                    color = colors.accentOnSurface,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                CouiText(
+                                    text = "⌄",
+                                    kind = CouiTextKind.ItemValue,
+                                    color = colors.onSurfaceVariant,
+                                )
                             }
-                            CouiText(
-                                text = selectedLabel,
-                                kind = CouiTextKind.ItemValue,
-                                color = colors.accentOnSurface,
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            CouiText(
-                                text = "⌄",
-                                kind = CouiTextKind.ItemValue,
-                                color = colors.onSurfaceVariant,
+                            Menu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false },
+                                items = items,
+                                onItemClick = { item ->
+                                    expanded = false
+                                    if (item.value != selectedValueState &&
+                                        (listener?.onValueSelected(item.value) ?: true)
+                                    ) {
+                                        selectedValueState = item.value
+                                    }
+                                },
+                                anchor = anchor,
+                                headerText = titleState,
                             )
                         }
-                        Menu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false },
-                            items = items,
-                            onItemClick = { item ->
-                                expanded = false
-                                if (item.value != selectedValueState &&
-                                    (listener?.onValueSelected(item.value) ?: true)
-                                ) {
-                                    selectedValueState = item.value
-                                }
-                            },
-                            anchor = anchor,
-                            headerText = titleState,
-                        )
                     }
                 }
             }

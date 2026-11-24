@@ -8,6 +8,7 @@ import java.util.Locale;
 /** Per-device display preferences applied whenever the bridge owns the band session. */
 public final class BandDisplaySettings {
     public static final String CHINESE = "zh_CN";
+    public static final String TRADITIONAL_CHINESE = "zh_TW";
     public static final String ENGLISH = "en_US";
 
     private static final String PREFS = "band-display-settings";
@@ -44,6 +45,7 @@ public final class BandDisplaySettings {
     public static String languageLabel(String locale) {
         return switch (canonicalLanguage(locale)) {
             case CHINESE -> "简体中文";
+            case TRADITIONAL_CHINESE -> "繁體中文";
             case ENGLISH -> "English";
             default -> "—";
         };
@@ -53,11 +55,18 @@ public final class BandDisplaySettings {
         if (locale == null) return "";
         String normalized = locale.trim().replace('-', '_');
         if (CHINESE.equalsIgnoreCase(normalized)) return CHINESE;
+        if (TRADITIONAL_CHINESE.equalsIgnoreCase(normalized)) return TRADITIONAL_CHINESE;
         if (ENGLISH.equalsIgnoreCase(normalized)) return ENGLISH;
         return "";
     }
 
     public static String defaultLanguage(Locale locale) {
-        return locale != null && "zh".equalsIgnoreCase(locale.getLanguage()) ? CHINESE : ENGLISH;
+        if (locale == null || !"zh".equalsIgnoreCase(locale.getLanguage())) return ENGLISH;
+        String country = locale.getCountry();
+        boolean traditional = "Hant".equalsIgnoreCase(locale.getScript())
+                || "TW".equalsIgnoreCase(country)
+                || "HK".equalsIgnoreCase(country)
+                || "MO".equalsIgnoreCase(country);
+        return traditional ? TRADITIONAL_CHINESE : CHINESE;
     }
 }
