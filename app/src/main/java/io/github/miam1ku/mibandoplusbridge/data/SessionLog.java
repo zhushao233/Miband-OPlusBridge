@@ -79,6 +79,8 @@ public final class SessionLog {
     private static final String BUNDLE = "band-debug";
     private static final int CAPTURE_FILES = 3;
     private static final long CAPTURE_BYTES = 24L * 1024 * 1024;
+    private static final int VOICE_SAMPLE_FILES = 1;
+    private static final long VOICE_SAMPLE_BYTES = 64L * 1024;
 
     /**
      * One archive for analysis: the session trace, the checked transport profile, and the
@@ -106,6 +108,10 @@ public final class SessionLog {
             put(zip, "README.txt", readme().getBytes(StandardCharsets.UTF_8));
             for (File capture : pickCaptures(captureFiles(context), CAPTURE_FILES, CAPTURE_BYTES)) {
                 put(zip, "captures/" + capture.getName(), capture);
+            }
+            for (File sample : pickCaptures(voiceSampleFiles(context),
+                    VOICE_SAMPLE_FILES, VOICE_SAMPLE_BYTES)) {
+                put(zip, "voice-samples/" + sample.getName(), sample);
             }
         } catch (IOException failed) {
             out.delete();
@@ -151,12 +157,18 @@ public final class SessionLog {
         return directory.listFiles((parent, name) -> name.startsWith("capture-") && name.endsWith(".jsonl"));
     }
 
+    private static File[] voiceSampleFiles(Context context) {
+        File directory = new File(context.getNoBackupFilesDir(), "voice-samples");
+        return directory.listFiles((parent, name) -> name.startsWith("voice-") && name.endsWith(".raw"));
+    }
+
     private static String readme() {
         return "miband-oplusbridge 调试包\n"
                 + "band-debug.txt：会话日志（已去除 MAC 与控制字符）\n"
                 + "transport-observation.json：最近一次连接的传输参数（SPP/GATT、鉴权分支、RFCOMM）\n"
                 + "captures/*.jsonl：协议消息采集，一行一条，payloadBase64 是原始帧；\n"
-                + "  tx/rx 是方向，capturedAtMs/elapsedRealtimeNs 是宿主时间，receivedAtMs 是模块落盘时间。\n";
+                + "  tx/rx 是方向，capturedAtMs/elapsedRealtimeNs 是宿主时间，receivedAtMs 是模块落盘时间。\n"
+                + "voice-samples/*.raw：仅在“保存原始语音帧”开启时生成，最多 64 KB。\n";
     }
 
     private static void put(ZipOutputStream zip, String name, byte[] content) throws IOException {

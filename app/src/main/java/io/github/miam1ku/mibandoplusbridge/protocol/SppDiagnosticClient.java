@@ -31,6 +31,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
@@ -38,6 +39,11 @@ import org.json.JSONObject;
 
 /** One authenticated SPP session. Live mode stays open until closed. An activity file is confirmed after it is stored. */
 public final class SppDiagnosticClient implements AutoCloseable {
+    @FunctionalInterface
+    public interface UnknownDataObserver {
+        void accept(int sequence, boolean frx, int flags, int channel, int opcode, byte[] payload);
+    }
+
     private static final AtomicReference<SppDiagnosticClient> ACTIVE = new AtomicReference<>();
     private static volatile CountDownLatch activeCompletion;
     private static final String SERVICE = "00001101-0000-1000-8000-00805f9b34fb";
@@ -58,6 +64,8 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private volatile boolean closed;
     private volatile boolean timedOut;
     private volatile String linkStop;
+    private volatile String closeReason = "caller-close";
+    private final AtomicBoolean closeLogged = new AtomicBoolean();
     private final Object writeLock = new Object();
     private InputStream input;
     private OutputStream output;
@@ -74,6 +82,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private Consumer<LiveCommandQueue> onLiveReady;
     private Consumer<byte[]> onFileStored;
     private Consumer<XiaomiProto.Command> onLiveCommand;
+    private UnknownDataObserver unknownDataObserver;
     private Consumer<java.util.List<BandHistoryParser.Measurement>> onSleepFile;
     private volatile LiveCommandQueue liveCommands;
     private volatile XiaomiMassReceive deviceLogReceiver;
@@ -88,6 +97,22 @@ public final class SppDiagnosticClient implements AutoCloseable {
 
     public int notificationPayloadLimit() {
         return liveCommands == null || closed ? 0 : Math.max(0, peerPayloadLimit - 2);
+    }
+
+    /** Optional experimental channels are observed; their sequence counters never advance commands. */
+    public void setUnknownDataObserver(UnknownDataObserver observer) {
+        unknownDataObserver = observer;
+    }
+
+    /** Queues one AIVS protobuf body on the live protobuf channel. Never opens a second socket. */
+    public CompletionStage<Void> sendAivs(byte[] payload) {
+        LiveCommandQueue queue = liveCommands;
+        if (queue == null || closed) {
+            java.util.concurrent.CompletableFuture<Void> failed = new java.util.concurrent.CompletableFuture<>();
+            failed.completeExceptionally(new Failure("LIVE_SESSION_UNAVAILABLE"));
+            return failed;
+        }
+        return queue.sendRaw(payload);
     }
 
     /** Registers the one active full device-log MASS receiver before report 2/80 is sent. */
@@ -216,7 +241,11 @@ public final class SppDiagnosticClient implements AutoCloseable {
             thread.setDaemon(true);
             return thread;
         });
-        var deadline = watchdog.schedule(() -> { timedOut = true; close(); }, deadlineSeconds, TimeUnit.SECONDS);
+        var deadline = watchdog.schedule(() -> {
+            timedOut = true;
+            closeReason = "handshake-deadline";
+            close();
+        }, deadlineSeconds, TimeUnit.SECONDS);
         byte[] phoneNonce = new byte[16];
         CountDownLatch finished = new CountDownLatch(1);
         if (!ACTIVE.compareAndSet(null, this)) {
@@ -376,7 +405,8 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 prepareHistory();
                 liveHold = true;
                 long timeout = 10_000L;
-                liveCommands = new LiveCommandQueue(sentSequence, timeout, this::writeLiveCommand);
+                liveCommands = new LiveCommandQueue(sentSequence, timeout, this::writeLiveCommand,
+                        this::writeLiveAivs);
                 flushHeldActivity();
                 onLiveReady.accept(liveCommands);
                 progress.accept("LIVE_SESSION_OPEN");
@@ -694,6 +724,48 @@ public final class SppDiagnosticClient implements AutoCloseable {
             if (failure instanceof Failure typed && "ICON_CHUNK_TIMEOUT".equals(typed.code)) throw failure;
             linkStop = failure instanceof Failure typed ? typed.code : failure.getClass().getSimpleName();
             SessionLog.line(context, "link stop " + linkStop);
+            closeReason = "live-command-write-failed";
+            close();
+            throw failure;
+        }
+    }
+
+    /**
+     * AIVS instructions use the protobuf channel but carry a raw oyt body. The official
+     * wearable core sends business type 101 this way: channel 1, encrypted, no Command wrapper.
+     */
+    private void writeLiveAivs(int sequence, byte[] payload) throws Exception {
+        try {
+            if (closed) throw new Failure("CANCELLED");
+            if (framing != 0) throw new Failure("AIVS_REQUIRES_SPP_V2");
+            if (!authenticated) throw new Failure("ENCRYPTION_STATE_MISMATCH");
+            int plainLength = payload.length;
+            OwnershipController.beginNativeSession();
+            try {
+                if (!new OwnershipController(context).nativeReady()) {
+                    throw new Failure("NATIVE_OWNERSHIP_LOST");
+                }
+                byte[] cipher = session.encryptV2(payload);
+                if (!commandFitsPayloadLimit(framing, cipher.length, peerPayloadLimit)) {
+                    throw new Failure("AIVS_EXCEEDS_NEGOTIATED_SIZE");
+                }
+                SessionLog.line(context, "tx aivs seq=" + sequence + " plain=" + plainLength
+                        + " wire=" + cipher.length);
+                sendFrame(SppV2Codec.dataFrame(sequence, SppV2Codec.CHANNEL_PROTOBUF,
+                        SppV2Codec.OPCODE_ENCRYPTED, cipher));
+                // AIVS business type 101 is fire-and-forget on the official path. A completed
+                // encrypted SPP write is the end of the instruction; a later transport ACK
+                // is ignored once the sequence has been retired.
+                LiveCommandQueue queue = liveCommands;
+                if (queue != null) queue.onAck(sequence);
+            } finally {
+                OwnershipController.endNativeSession();
+            }
+        } catch (Exception failure) {
+            linkStop = failure instanceof Failure typed ? typed.code
+                    : failure.getClass().getSimpleName();
+            SessionLog.line(context, "link stop " + linkStop + " reason=aivs-write");
+            closeReason = "aivs-write-failed";
             close();
             throw failure;
         }
@@ -869,13 +941,17 @@ public final class SppDiagnosticClient implements AutoCloseable {
         }
         int channel = rawPayload.length == 0 ? -1 : rawPayload[0] & 0x0f;
         int expected = receive.expected();
-        if (!frame.frx() && channel != 7 && channel != 10 && sequence != expected
+        if (!frame.frx() && SppV2Codec.channelRequiresAck(channel) && sequence != expected
                 && receivedAt[sequence] >= 0 && receive.count() - receivedAt[sequence] <= 32
                 && Arrays.equals(rawPayload, receivedPayloads[sequence])) {
             sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_ACK, sequence, new byte[0]));
             return null;
         }
         SppV2Codec.ReceiveCursor.Decision decision = receive.offer(sequence, frame.frx(), channel);
+        if (decision == SppV2Codec.ReceiveCursor.Decision.OBSERVE) {
+            observeUnknownData(frame);
+            return null;
+        }
         if (decision == SppV2Codec.ReceiveCursor.Decision.DROP) {
             SessionLog.line(context, "rx spp2 seq=" + sequence + " expected=" + expected
                     + " channel=" + channel + " action=drop");
@@ -892,7 +968,10 @@ public final class SppDiagnosticClient implements AutoCloseable {
                     + " channel=" + channel + " frx=" + frame.frx() + " action=resync");
         }
         var data = SppV2Codec.parseData(frame);
-        if (data.flags() != 0) throw new Failure("UNSUPPORTED_DATA_CHANNEL");
+        if (data.flags() != 0) {
+            observeUnknownData(frame);
+            return null;
+        }
         if (data.channel() == SppV2Codec.CHANNEL_ACTIVITY) {
             acceptActivity(data, sequence, rawPayload);
             return null;
@@ -905,7 +984,8 @@ public final class SppDiagnosticClient implements AutoCloseable {
             } else if (data.opcode() == SppV2Codec.OPCODE_PLAINTEXT) {
                 plain = data.payload();
             } else {
-                throw new Failure("UNSUPPORTED_DATA_CHANNEL");
+                observeUnknownData(data, sequence, frame.frx());
+                return null;
             }
             try {
                 acceptDeviceLogMass(plain);
@@ -919,12 +999,38 @@ public final class SppDiagnosticClient implements AutoCloseable {
             return null;
         }
         if (data.channel() != SppV2Codec.CHANNEL_PROTOBUF) {
-            throw new Failure("UNSUPPORTED_DATA_CHANNEL");
+            if (data.channel() == SppV2Codec.CHANNEL_VOICE
+                    && data.opcode() == SppV2Codec.OPCODE_ENCRYPTED && authenticated) {
+                byte[] plaintext = session.decryptV2(data.payload());
+                try {
+                    observeUnknownPayload(sequence, frame.frx(), data.flags(), data.channel(),
+                            data.opcode(), plaintext);
+                } finally {
+                    Arrays.fill(plaintext, (byte) 0);
+                }
+                return null;
+            }
+            observeUnknownData(frame);
+            return null;
         }
         int expectedOpcode = authenticated ? SppV2Codec.OPCODE_ENCRYPTED : SppV2Codec.OPCODE_PLAINTEXT;
-        if (data.opcode() != expectedOpcode) throw new Failure("ENCRYPTION_STATE_MISMATCH");
+        if (data.opcode() != expectedOpcode) {
+            observeUnknownData(frame);
+            return null;
+        }
         byte[] plaintext = authenticated ? session.decryptV2(data.payload()) : data.payload();
-        var command = XiaomiProto.Command.parseFrom(plaintext);
+        XiaomiProto.Command command;
+        try {
+            command = XiaomiProto.Command.parseFrom(plaintext);
+        } catch (com.google.protobuf.InvalidProtocolBufferException notACommand) {
+            // Voice audio may share the protobuf channel without using a protobuf packet body.
+            // Preserve the session and pass the decrypted candidate to the voice observer.
+            observeUnknownPayload(sequence, frame.frx(), data.flags(), data.channel(),
+                    data.opcode(), plaintext);
+            Arrays.fill(plaintext, (byte) 0);
+            return null;
+        }
+        Arrays.fill(plaintext, (byte) 0);
         if (command.getType() == 10 && command.hasSubtype() && command.getSubtype() == 5
                 && command.hasWeather() && command.getWeather().hasLocations()) {
             observedLocations = command.getWeather().getLocations();
@@ -935,6 +1041,37 @@ public final class SppDiagnosticClient implements AutoCloseable {
         sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_ACK, sequence, new byte[0]));
         publishBattery(command);
         return command;
+    }
+
+    /**
+     * Builds that open the voice assistant page may use a side channel outside the normal
+     * protobuf counter. A previous strict rejection killed the SPP link before the first audio
+     * packet. ACK and continue, while recording only frame metadata for diagnosis.
+     */
+    private void observeUnknownData(SppV2Codec.Frame frame) throws Exception {
+        SppV2Codec.Data data = SppV2Codec.parseData(frame);
+        observeUnknownData(data, frame.sequence(), frame.frx());
+    }
+
+    private void observeUnknownData(SppV2Codec.Data data, int sequence, boolean frx)
+            throws Exception {
+        byte[] payload = data.payload();
+        observeUnknownPayload(sequence, frx, data.flags(), data.channel(), data.opcode(), payload);
+        Arrays.fill(payload, (byte) 0);
+    }
+
+    private void observeUnknownPayload(int sequence, boolean frx, int flags, int channel,
+                                       int opcode, byte[] payload) throws Exception {
+        try {
+            UnknownDataObserver observer = unknownDataObserver;
+            if (observer != null) {
+                observer.accept(sequence, frx, flags, channel, opcode, payload.clone());
+            }
+        } finally {
+            if (SppV2Codec.channelRequiresAck(channel)) {
+                sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_ACK, sequence, new byte[0]));
+            }
+        }
     }
 
     private void prepareHistory() throws Exception {
@@ -1158,6 +1295,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
             if (linkStop != null) throw new Failure(linkStop);
         } catch (Exception error) {
             if (linkStop != null) throw new Failure(linkStop);
+            if (!closed) SessionLog.line(context, "spp reader failed " + failureText(error));
             if (!closed) throw error;
         } finally {
             OwnershipController.beginNativeSession();
@@ -1210,6 +1348,12 @@ public final class SppDiagnosticClient implements AutoCloseable {
     }
 
     @Override public void close() {
+        if (closeLogged.compareAndSet(false, true)) {
+            SessionLog.line(context, "spp close reason=" + closeReason
+                    + " linkStop=" + (linkStop == null ? "" : linkStop)
+                    + " framing=" + framing + " auth=" + authenticated
+                    + " live=" + liveHold);
+        }
         cancelDeviceLogReceive("MASS_RECEIVE_CANCELLED");
         LiveCommandQueue commands = liveCommands;
         if (commands != null) commands.close(new IllegalStateException("SESSION_CLOSED"));

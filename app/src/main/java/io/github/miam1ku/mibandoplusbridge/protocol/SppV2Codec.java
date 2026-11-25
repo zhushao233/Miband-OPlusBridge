@@ -33,7 +33,13 @@ public final class SppV2Codec {
     public static final int CHANNEL_PROTOBUF = 1;
     /** Plaintext bulk channel. Notification icons travel here after the type 22 accept. */
     public static final int CHANNEL_DATA = 2;
+    /** Voice-page audio blocks. Opcode 2 payloads use the same SPP V2 session stream cipher. */
+    public static final int CHANNEL_VOICE = 3;
     public static final int CHANNEL_ACTIVITY = 5;
+    /** Network proxy traffic. It does not participate in the ordinary receive cursor. */
+    public static final int CHANNEL_NETWORK = 7;
+    /** Assistant / multi-modal traffic. It does not participate in the ordinary receive cursor. */
+    public static final int CHANNEL_MULTI_MODAL = 10;
     public static final int OPCODE_PLAINTEXT = 1;
     public static final int OPCODE_ENCRYPTED = 2;
 
@@ -200,10 +206,10 @@ public final class SppV2Codec {
     /**
      * An ahead packet is NAK'd once. The same sequence again, or one more than
      * half a window behind, is accepted and the cursor resyncs. Channels 7 and 10
-     * are outside this counter.
+     * are outside this counter, but still need to reach their caller for inspection.
      */
     public static final class ReceiveCursor {
-        public enum Decision { TAKE, DROP, NAK }
+        public enum Decision { TAKE, OBSERVE, DROP, NAK }
 
         private int receivedCount;
         private int aheadSequence = -1;
@@ -212,7 +218,9 @@ public final class SppV2Codec {
         public int count() { return receivedCount; }
 
         public Decision offer(int sequence, boolean frx, int channel) {
-            if (channel == 7 || channel == 10) return Decision.DROP;
+            if (channel == CHANNEL_NETWORK || channel == CHANNEL_MULTI_MODAL) {
+                return Decision.OBSERVE;
+            }
             int expected = expected();
             if (frx || sequence == expected) {
                 advanceTo(sequence + 1);
@@ -231,6 +239,11 @@ public final class SppV2Codec {
             receivedCount += (next - (receivedCount & 255)) & 255;
             aheadSequence = -1;
         }
+    }
+
+    /** NETWORK and MULTI_MODAL are explicitly excluded from the ordinary ACK protocol. */
+    public static boolean channelRequiresAck(int channel) {
+        return channel != CHANNEL_NETWORK && channel != CHANNEL_MULTI_MODAL;
     }
 
     public record Parameter(int key, byte[] value) {

@@ -95,6 +95,7 @@ public final class MainActivity extends AppCompatActivity {
     private BridgeScreen permissionsPage;
     private BridgeScreen appearancePage;
     private BridgeScreen sleepProtectionPage;
+    private BridgeScreen voiceAssistantPage;
     private BridgeScreen aboutPage;
     private int currentTabId = R.id.tab_device;
     private boolean secondaryPage;
@@ -137,6 +138,17 @@ public final class MainActivity extends AppCompatActivity {
     private AppCompatEditText sleepEndInput;
     private TextView sleepProtectionInputHint;
     private boolean syncingSleepInputs;
+    private MiuixBasicView voiceAssistantRow;
+    private BridgeScreen.ToggleRow voiceAssistantEnabled;
+    private BridgeScreen.ToggleRow voiceAssistantCaptureRaw;
+    private TextView voicePresetStatus;
+    private io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantPreset voicePreset =
+            io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantPreset.OPENAI;
+    private AppCompatEditText voiceBaseUrlInput;
+    private AppCompatEditText voiceApiKeyInput;
+    private AppCompatEditText voiceTranscriptionModelInput;
+    private AppCompatEditText voiceChatModelInput;
+    private AppCompatEditText voiceSystemPromptInput;
 
     private LinearLayout bonded;
     private TextView bindingStatus;
@@ -220,6 +232,7 @@ public final class MainActivity extends AppCompatActivity {
         permissionsPage = screen.page();
         appearancePage = screen.page();
         sleepProtectionPage = screen.page();
+        voiceAssistantPage = screen.page();
         aboutPage = screen.page();
 
         buildDeviceTab();
@@ -231,6 +244,7 @@ public final class MainActivity extends AppCompatActivity {
         buildPermissionsPage();
         buildAppearancePage();
         buildSleepProtectionPage();
+        buildVoiceAssistantPage();
         buildAboutPage();
 
         if (state != null) {
@@ -634,6 +648,11 @@ public final class MainActivity extends AppCompatActivity {
         });
         debug.setSummary(Copy.SETTINGS_DEBUG_SUMMARY);
         debug.setIcon(rowIcon(R.drawable.ic_debug));
+        voiceAssistantRow = settingsPage.navRow(advanced, "语音助手（实验）", () -> {
+            loadVoiceAssistantControls();
+            showSecondaryPage(voiceAssistantPage, "语音助手（实验）", this::refreshSettingsRows);
+        });
+        voiceAssistantRow.setIcon(rowIcon(R.drawable.ic_tab_tools));
 
         settingsPage.heading(Copy.SETTINGS_HELP);
         LinearLayout about = settingsPage.card();
@@ -652,6 +671,13 @@ public final class MainActivity extends AppCompatActivity {
         if (sleepProtectionRow != null) {
             sleepProtectionRow.setSummary(Copy.sleepProtectionSummary(
                     SleepProtectionSchedule.load(this)));
+        }
+        if (voiceAssistantRow != null) {
+            var voice = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                    .load(this);
+            voiceAssistantRow.setSummary(voice.complete()
+                    ? "已开启 · 手环语音转可配置大模型"
+                    : voice.enabled() ? "已开启 · 请补齐 API 设置" : "默认关闭 · 仅手环主动发起时工作");
         }
     }
 
@@ -986,6 +1012,166 @@ public final class MainActivity extends AppCompatActivity {
         params.leftMargin = dp(left);
         params.rightMargin = dp(right);
         row.addView(field, params);
+    }
+
+    // ---- experimental voice assistant page ----
+
+    private void buildVoiceAssistantPage() {
+        LinearLayout warning = voiceAssistantPage.noticeCard(Tone.NEUTRAL);
+        voiceAssistantPage.title(warning, "实验功能");
+        voiceAssistantPage.bodyText(warning,
+                "手环打开语音页后，桥接会接收麦克风 Opus 音频，转写并请求所选服务的大模型。"
+                        + "回答会通过桥接直接回到小爱语音页，全程使用现有 SPP 会话。");
+
+        LinearLayout controls = voiceAssistantPage.card();
+        voiceAssistantEnabled = voiceAssistantPage.switchRow(controls, "启用手环语音接管",
+                "关闭后暂停音频上传，并保持实验 SPP 帧原样。");
+        voiceAssistantEnabled.setOnStateChangeListener(checked -> true);
+
+        voiceAssistantPage.overline(controls, "服务商预设");
+        voicePresetStatus = voiceAssistantPage.caption(controls, "");
+        MiuixBasicView deepSeekPreset = voiceAssistantPage.navRow(controls,
+                "DeepSeek 官方预设", () -> applyVoiceAssistantPreset(
+                        io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantPreset.DEEPSEEK));
+        deepSeekPreset.setSummary("服务端 tools/asr · deepseek-flash");
+        MiuixBasicView openAiPreset = voiceAssistantPage.navRow(controls,
+                "OpenAI 官方预设", () -> applyVoiceAssistantPreset(
+                        io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantPreset.OPENAI));
+        openAiPreset.setSummary("Whisper · gpt-4.1-mini");
+
+        voiceBaseUrlInput = configInput("https://api.openai.com/v1",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        addConfigField(controls, "兼容接口 Base URL", voiceBaseUrlInput);
+        voiceApiKeyInput = configInput("留空则保留已保存的密钥",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        addConfigField(controls, "API Key", voiceApiKeyInput);
+        voiceTranscriptionModelInput = configInput("whisper-1", InputType.TYPE_CLASS_TEXT);
+        addConfigField(controls, "语音转写模型", voiceTranscriptionModelInput);
+        voiceChatModelInput = configInput("gpt-4.1-mini", InputType.TYPE_CLASS_TEXT);
+        addConfigField(controls, "对话模型", voiceChatModelInput);
+        voiceSystemPromptInput = configInput("回答要简洁", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        voiceSystemPromptInput.setSingleLine(false);
+        voiceSystemPromptInput.setMinLines(3);
+        voiceSystemPromptInput.setGravity(Gravity.START | Gravity.TOP);
+        addConfigField(controls, "系统提示词", voiceSystemPromptInput);
+
+        voiceAssistantCaptureRaw = voiceAssistantPage.switchRow(controls, "保存原始语音帧",
+                "仅用于排查通道格式，最多保存 64 KB 到应用私有目录；默认关闭。");
+        voiceAssistantCaptureRaw.setOnStateChangeListener(checked -> true);
+        voiceAssistantPage.filled(controls, "保存语音助手设置", this::saveVoiceAssistantSettings);
+        voiceAssistantPage.caption(controls,
+                "Base URL 必须以 https:// 开头。API Key 使用 Android Keystore 加密，"
+                        + "桥接日志会隐藏密钥内容。录音仅在手环主动启动语音页时接收。");
+        loadVoiceAssistantControls();
+    }
+
+    private AppCompatEditText configInput(String hint, int inputType) {
+        AppCompatEditText input = new AppCompatEditText(this);
+        input.setHint(hint);
+        input.setInputType(inputType);
+        input.setSingleLine((inputType & InputType.TYPE_TEXT_FLAG_MULTI_LINE) == 0);
+        input.setTextColor(color(R.color.on_surface));
+        input.setHintTextColor(color(R.color.on_surface_variant));
+        input.setPadding(dp(12), dp(10), dp(12), dp(10));
+        input.setBackground(BridgeScreen.roundedRect(
+                color(R.color.surface_variant), dp(12), 0, 0));
+        return input;
+    }
+
+    private void addConfigField(LinearLayout card, String label, AppCompatEditText input) {
+        LinearLayout field = new LinearLayout(this);
+        field.setOrientation(LinearLayout.VERTICAL);
+        TextView name = text(13, R.color.on_surface_variant, true);
+        name.setText(label);
+        field.addView(name, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams inputParams =
+                new LinearLayout.LayoutParams(-1, input.getMinLines() > 1 ? dp(96) : dp(50));
+        inputParams.topMargin = dp(6);
+        field.addView(input, inputParams);
+        addWithMargins(card, field, 16, 7, 16, 7);
+    }
+
+    private void loadVoiceAssistantControls() {
+        var voice = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings.load(this);
+        voicePreset = voice.preset();
+        if (voiceAssistantEnabled != null) voiceAssistantEnabled.setChecked(voice.enabled());
+        if (voiceAssistantCaptureRaw != null) {
+            voiceAssistantCaptureRaw.setChecked(voice.captureRaw());
+        }
+        if (voiceBaseUrlInput != null) voiceBaseUrlInput.setText(voice.baseUrl());
+        if (voiceApiKeyInput != null) {
+            voiceApiKeyInput.setText("");
+            voiceApiKeyInput.setHint(io.github.miam1ku.mibandoplusbridge.voice
+                    .VoiceAssistantSettings.maskedApiKey(this).isBlank()
+                    ? "填写 API Key"
+                    : io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                            .maskedApiKey(this));
+        }
+        if (voiceTranscriptionModelInput != null) {
+            voiceTranscriptionModelInput.setEnabled(voicePreset.usesTranscriptionModel());
+            voiceTranscriptionModelInput.setText(voicePreset.usesTranscriptionModel()
+                    ? voice.transcriptionModel() : "");
+            voiceTranscriptionModelInput.setHint(voicePreset.usesTranscriptionModel()
+                    ? "whisper-1" : "按服务端 ASR 约定");
+        }
+        if (voiceChatModelInput != null) voiceChatModelInput.setText(voice.chatModel());
+        if (voiceSystemPromptInput != null) {
+            voiceSystemPromptInput.setText(voice.systemPrompt());
+        }
+        updateVoicePresetStatus();
+    }
+
+    private void applyVoiceAssistantPreset(
+            io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantPreset preset) {
+        voicePreset = preset;
+        if (voiceBaseUrlInput != null) voiceBaseUrlInput.setText(preset.baseUrl());
+        if (voiceTranscriptionModelInput != null) {
+            voiceTranscriptionModelInput.setEnabled(preset.usesTranscriptionModel());
+            voiceTranscriptionModelInput.setText(preset.transcriptionModel());
+            voiceTranscriptionModelInput.setHint(preset.usesTranscriptionModel()
+                    ? "whisper-1" : "按服务端 ASR 约定");
+        }
+        if (voiceChatModelInput != null) voiceChatModelInput.setText(preset.chatModel());
+        updateVoicePresetStatus();
+    }
+
+    private void updateVoicePresetStatus() {
+        if (voicePresetStatus == null) return;
+        voicePresetStatus.setText("当前预设：" + voicePreset.displayName()
+                + " · 点击预设后保存");
+    }
+
+    private void saveVoiceAssistantSettings() {
+        String baseUrl = voiceBaseUrlInput == null || voiceBaseUrlInput.getText() == null
+                ? "" : voiceBaseUrlInput.getText().toString();
+        if (!io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                .validHttpsUrl(baseUrl.trim())) {
+            Toast.makeText(this, "接口地址必须是有效的 HTTPS URL", Toast.LENGTH_LONG).show();
+            return;
+        }
+        boolean saved = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings.save(
+                this,
+                voicePreset.id(),
+                voiceAssistantEnabled != null && voiceAssistantEnabled.isChecked(),
+                baseUrl,
+                voicePreset.usesTranscriptionModel() ? textOf(voiceTranscriptionModelInput) : "",
+                textOf(voiceChatModelInput),
+                textOf(voiceSystemPromptInput),
+                textOf(voiceApiKeyInput),
+                voiceAssistantCaptureRaw != null && voiceAssistantCaptureRaw.isChecked());
+        if (!saved) {
+            Toast.makeText(this, "请检查设置后再保存；启用时需填写 HTTPS 地址和 API Key",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        loadVoiceAssistantControls();
+        refreshSettingsRows();
+        Toast.makeText(this, "语音助手设置已保存", Toast.LENGTH_SHORT).show();
+    }
+
+    private static String textOf(AppCompatEditText input) {
+        return input == null || input.getText() == null ? "" : input.getText().toString();
     }
 
     private void refreshSleepProtectionControls(SleepProtectionSchedule.Window window) {

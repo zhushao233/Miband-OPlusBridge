@@ -46,10 +46,17 @@ public final class LiveCommandQueue implements AutoCloseable {
         void write(int sequence, XiaomiProto.Command command) throws Exception;
     }
 
+    /** AIVS instructions are raw protobuf bodies, not XiaomiProto.Command envelopes. */
+    @FunctionalInterface
+    public interface RawSender {
+        void write(int sequence, byte[] payload) throws Exception;
+    }
+
     private enum Kind { GENERAL, NOTIFICATION, DISMISS, FILE_CONFIRM, CALL }
 
     private static final class Work {
         final XiaomiProto.Command command;
+        final byte[] raw;
         final int responseType;
         final int responseSubtype;
         final Kind kind;
@@ -62,9 +69,19 @@ public final class LiveCommandQueue implements AutoCloseable {
 
         Work(XiaomiProto.Command command, int type, int subtype, Kind kind, long timeoutMillis) {
             this.command = command;
+            this.raw = null;
             this.responseType = type;
             this.responseSubtype = subtype;
             this.kind = kind;
+            this.timeoutMillis = timeoutMillis;
+        }
+
+        Work(byte[] raw, long timeoutMillis) {
+            this.command = null;
+            this.raw = raw.clone();
+            this.responseType = -1;
+            this.responseSubtype = -1;
+            this.kind = Kind.GENERAL;
             this.timeoutMillis = timeoutMillis;
         }
 
@@ -74,6 +91,7 @@ public final class LiveCommandQueue implements AutoCloseable {
 
     private final Object lock = new Object();
     private final Sender sender;
+    private final RawSender rawSender;
     private final long timeoutMillis;
     private final long quarantineNanos;
     private final ScheduledThreadPoolExecutor worker;
@@ -88,10 +106,16 @@ public final class LiveCommandQueue implements AutoCloseable {
     private boolean closed;
 
     public LiveCommandQueue(int initialSequence, long timeoutMillis, Sender sender) {
+        this(initialSequence, timeoutMillis, sender, null);
+    }
+
+    public LiveCommandQueue(int initialSequence, long timeoutMillis, Sender sender,
+                            RawSender rawSender) {
         if (initialSequence < 0 || initialSequence > 255) {
             throw new IllegalArgumentException("LIVE_SEQUENCE_INVALID");
         }
         this.sender = Objects.requireNonNull(sender, "LIVE_SENDER_REQUIRED");
+        this.rawSender = rawSender;
         this.nextSequence = initialSequence;
         this.timeoutMillis = timeoutMillis <= 0
                 || timeoutMillis > TimeUnit.NANOSECONDS.toMillis(Long.MAX_VALUE / 4)
@@ -118,6 +142,33 @@ public final class LiveCommandQueue implements AutoCloseable {
     /** Completes after the matching transport ACK. Device-side rendering is a later event. */
     public CompletionStage<Void> send(XiaomiProto.Command command) {
         return submit(command, -1, -1, timeoutMillis).thenApply(ignored -> null);
+    }
+
+    /** Queues one already-encoded AIVS protobuf body on the normal live sequence counter. */
+    public CompletionStage<Void> sendRaw(byte[] payload) {
+        if (payload == null || payload.length == 0) return failedVoid("LIVE_RAW_INVALID");
+        synchronized (lock) {
+            if (closed) return failedVoid("LIVE_QUEUE_CLOSED");
+            if (rawSender == null) return failedVoid("LIVE_RAW_UNSUPPORTED");
+            int ordinary = 0;
+            Work disposable = null;
+            for (Work item : work) {
+                if (item.ordinary()) ordinary++;
+                if (disposable == null && item.kind == Kind.NOTIFICATION && item.sequence < 0) {
+                    disposable = item;
+                }
+            }
+            if (ordinary >= CAPACITY) {
+                if (disposable == null) return failedVoid("LIVE_QUEUE_FULL");
+                finishLocked(disposable, null, failure("LIVE_NOTIFICATION_DROPPED"));
+            }
+            Work item = new Work(payload, timeoutMillis);
+            work.add(item);
+            item.timeout = deadlines.schedule(() -> expire(item), item.timeoutMillis,
+                    TimeUnit.MILLISECONDS);
+            scheduleDrainLocked();
+            return item.result.thenApply(ignored -> null);
+        }
     }
 
     /** Completes only after both the matching transport ACK and a successful semantic response. */
@@ -275,7 +326,12 @@ public final class LiveCommandQueue implements AutoCloseable {
             pending[sequence] = selected;
         }
         try {
-            sender.write(selected.sequence, selected.command);
+            if (selected.command == null) {
+                if (rawSender == null) throw new IllegalStateException("LIVE_RAW_UNSUPPORTED");
+                rawSender.write(selected.sequence, selected.raw);
+            } else {
+                sender.write(selected.sequence, selected.command);
+            }
         } catch (Exception failure) {
             if (failure instanceof SppDiagnosticClient.Failure typed
                     && "ICON_CHUNK_TIMEOUT".equals(typed.code)) {
@@ -407,6 +463,12 @@ public final class LiveCommandQueue implements AutoCloseable {
 
     private static CompletableFuture<XiaomiProto.Command> failed(String code) {
         CompletableFuture<XiaomiProto.Command> future = new CompletableFuture<>();
+        future.completeExceptionally(failure(code));
+        return future;
+    }
+
+    private static CompletableFuture<Void> failedVoid(String code) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
         future.completeExceptionally(failure(code));
         return future;
     }

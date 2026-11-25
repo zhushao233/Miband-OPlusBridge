@@ -100,6 +100,7 @@ public final class BandLiveService extends Service {
     private static final int REALTIME_STATS_STOP = 46;
     private WeatherSync weatherSync;
     private HealthReplay healthReplay;
+    private io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantController voiceAssistant;
     private volatile long sessionEpoch;
     private static final java.util.concurrent.atomic.AtomicLong SESSION_IDS = new java.util.concurrent.atomic.AtomicLong();
     private io.github.miam1ku.mibandoplusbridge.notify.PhoneCallMonitor calls;
@@ -914,6 +915,30 @@ public final class BandLiveService extends Service {
                 coordinator.execute(() -> { if (!stopRequested && historySync != null) historySync.resume(); });
             } catch (java.util.concurrent.RejectedExecutionException stopping) { }
         });
+        voiceAssistant = new io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantController(
+                this,
+                instruction -> {
+                    SppDiagnosticClient active = client;
+                    if (active == null) return false;
+                    try {
+                        active.sendAivs(instruction).whenComplete((ignored, error) -> {
+                            if (error != null) {
+                                String code = error.getMessage();
+                                if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
+                                    code = error.getClass().getSimpleName();
+                                }
+                                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                                        "VOICE_AIVS transport-failed " + code);
+                            }
+                        });
+                        return true;
+                    } catch (RuntimeException unavailable) {
+                        return false;
+                    }
+                },
+                transcript -> main.post(() -> deliverVoiceTranscript(transcript)),
+                answer -> main.post(() -> deliverVoiceAnswer(answer)),
+                failure -> main.post(() -> deliverVoiceFailure(failure)));
         calls = new io.github.miam1ku.mibandoplusbridge.notify.PhoneCallMonitor(this, coordinator);
         io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(this);
         HostKeepAlive.runRoot(() -> {
@@ -1088,6 +1113,8 @@ public final class BandLiveService extends Service {
                         healthCollectionStatus(code);
                     }
                 });
+                active.setUnknownDataObserver(voiceAssistant::onUnknownFrame);
+                voiceAssistant.resetTransport();
                 active.setSleepFiles(measurements -> {
                     try {
                         coordinator.execute(() -> {
@@ -2619,6 +2646,72 @@ public final class BandLiveService extends Service {
         });
     }
 
+    private void deliverVoiceTranscript(String transcript) {
+        if (stopRequested || transcript == null || transcript.isBlank()) return;
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "VOICE_TRANSCRIPT chars=" + transcript.length());
+    }
+
+    /** The controller already delivered the answer over the live AIVS channel. */
+    private void deliverVoiceAnswer(io.github.miam1ku.mibandoplusbridge.voice.OpenAiVoiceClient.Answer answer) {
+        if (stopRequested || answer == null || answer.reply().isBlank()) return;
+        String body = answer.reply().trim();
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "VOICE_ANSWER chars=" + body.length());
+    }
+
+    private void deliverVoiceFailure(String failure) {
+        if (stopRequested) return;
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "VOICE_ASSISTANT failed " + failure);
+        String body;
+        if ("VOICE_FORMAT".equals(failure)) {
+            body = "请开启“保存原始语音帧”后重新说一遍，并导出日志。";
+        } else if ("VOICE_OGG".equals(failure)) {
+            body = "语音帧需要重新封装，请导出调试日志。";
+        } else {
+            body = "语音助手需要检查：" + failure;
+        }
+        deliverVoiceNotification("手环 AI", body);
+    }
+
+    private void deliverVoiceNotification(String title, String body) {
+        showVoiceAnswerNotification(title, body);
+        try {
+            int id = (int) (System.currentTimeMillis() & 0x7fffffff);
+            var command = io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand.post(
+                    getPackageName(), title, "voice-ai-" + id, id, title, body,
+                    java.time.Instant.now(), java.time.ZoneId.systemDefault());
+            int limit = notificationPayloadLimit();
+            if (limit > 0) {
+                sendSessionCommand(io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand
+                        .fitToPayload(command, limit));
+            } else {
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                        "VOICE_ANSWER band-unavailable");
+            }
+        } catch (RuntimeException unavailable) {
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "VOICE_ANSWER band-failed " + unavailable.getClass().getSimpleName());
+        }
+    }
+
+    private void showVoiceAnswerNotification(String title, String body) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
+        String channelId = "band-voice-ai";
+        NotificationChannel channel = new NotificationChannel(channelId, "手环语音助手",
+                NotificationManager.IMPORTANCE_DEFAULT);
+        manager.createNotificationChannel(channel);
+        Notification.Builder notice = new Notification.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
+                .setAutoCancel(true);
+        manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), notice.build());
+    }
+
     @Override public void onDestroy() {
         if (instance == this) instance = null;
         pendingManualSyncAtMs = 0;
@@ -2640,6 +2733,7 @@ public final class BandLiveService extends Service {
         try { getContentResolver().unregisterContentObserver(zenMode); } catch (RuntimeException ignored) { }
         requestStop();
         calls.close();
+        if (voiceAssistant != null) voiceAssistant.close();
         weatherSync.close();
         healthReplay.close();
         coordinator.execute(() -> {

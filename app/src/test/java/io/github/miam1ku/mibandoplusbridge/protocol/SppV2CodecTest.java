@@ -107,12 +107,22 @@ public final class SppV2CodecTest {
         assertEquals(1, cursor.expected());
         assertEquals(SppV2Codec.ReceiveCursor.Decision.TAKE, cursor.offer(2, false, 1));
         assertEquals(3, cursor.expected());
-        assertEquals(SppV2Codec.ReceiveCursor.Decision.DROP, cursor.offer(9, false, 7));
+        assertEquals(SppV2Codec.ReceiveCursor.Decision.OBSERVE,
+                cursor.offer(9, false, SppV2Codec.CHANNEL_NETWORK));
+        assertEquals(SppV2Codec.ReceiveCursor.Decision.OBSERVE,
+                cursor.offer(10, false, SppV2Codec.CHANNEL_MULTI_MODAL));
         assertEquals(3, cursor.expected());
         assertEquals(SppV2Codec.ReceiveCursor.Decision.TAKE, cursor.offer(0, false, 1));
         assertEquals(1, cursor.expected());
         assertEquals(SppV2Codec.ReceiveCursor.Decision.TAKE, cursor.offer(7, true, 1));
         assertEquals(8, cursor.expected());
+    }
+
+    @Test public void networkAndMultiModalDoNotUseOrdinaryAck() {
+        assertFalse(SppV2Codec.channelRequiresAck(SppV2Codec.CHANNEL_NETWORK));
+        assertFalse(SppV2Codec.channelRequiresAck(SppV2Codec.CHANNEL_MULTI_MODAL));
+        assertTrue(SppV2Codec.channelRequiresAck(SppV2Codec.CHANNEL_PROTOBUF));
+        assertTrue(SppV2Codec.channelRequiresAck(SppV2Codec.CHANNEL_VOICE));
     }
 
     private static byte[] join(byte[]... packets) {
