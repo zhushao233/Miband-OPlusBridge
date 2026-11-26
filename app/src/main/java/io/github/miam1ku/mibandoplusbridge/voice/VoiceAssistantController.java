@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -53,7 +54,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     private final Consumer<String> onTranscript;
     private final Consumer<OpenAiVoiceClient.Answer> onAnswer;
     private final Consumer<String> onFailure;
-    private final OpenAiVoiceClient client = new OpenAiVoiceClient();
+    private final VoiceApiClient client;
     private final VoiceConversationHistory history;
     private final AivsStreamParser parser = new AivsStreamParser();
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(
@@ -79,6 +80,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     private long lastPartialAt;
     private long generation;
     private int packets;
+    private int desyncCount;
     private int lastSequence = -1;
     private byte[] lastPayload = new byte[0];
     private String firstChunkProbe = "";
@@ -99,14 +101,27 @@ public final class VoiceAssistantController implements AutoCloseable {
                                     Consumer<String> onTranscript,
                                     Consumer<OpenAiVoiceClient.Answer> onAnswer,
                                     Consumer<String> onFailure) {
-        this.context = context.getApplicationContext();
+        this(context, replySink, commandExecutor, weatherContextProvider, onTranscript, onAnswer,
+                onFailure, new OpenAiVoiceClient(), new VoiceConversationHistory(context));
+    }
+
+    VoiceAssistantController(Context context, VoiceReplySink replySink,
+                             WatchCommandExecutor commandExecutor,
+                             WeatherContextProvider weatherContextProvider,
+                             Consumer<String> onTranscript,
+                             Consumer<OpenAiVoiceClient.Answer> onAnswer,
+                             Consumer<String> onFailure,
+                             VoiceApiClient client,
+                             VoiceConversationHistory history) {
+        this.context = context == null ? null : context.getApplicationContext();
         this.replySink = replySink;
         this.commandExecutor = commandExecutor;
         this.weatherContextProvider = weatherContextProvider;
         this.onTranscript = onTranscript;
         this.onAnswer = onAnswer;
         this.onFailure = onFailure;
-        this.history = new VoiceConversationHistory(this.context);
+        this.client = client == null ? new OpenAiVoiceClient() : client;
+        this.history = history == null ? new VoiceConversationHistory(this.context) : history;
         this.voiceActivity = new OpusVoiceActivityDetector(this.context,
                 this::voiceActivityStarted, this::voiceActivityEnded, ignored -> { });
     }
@@ -136,9 +151,15 @@ public final class VoiceAssistantController implements AutoCloseable {
                     + " frx=" + frx);
         }
         List<AivsStreamParser.Command> commands = parser.feed(payload);
-        String malformed = parser.takeMalformed();
-        if (!malformed.isEmpty()) {
-            SessionLog.line(context, "VOICE_PARSE reset " + malformed);
+        AivsStreamParser.Malformed malformed = parser.takeMalformed();
+        if (malformed != null) {
+            if (AivsStreamParser.MALFORMED_DESYNC.equals(malformed.kind())) {
+                desyncCount++;
+                SessionLog.line(context, "VOICE_PARSE desync " + malformed.detail()
+                        + " count=" + desyncCount);
+            } else {
+                SessionLog.line(context, "VOICE_PARSE truncated " + malformed.detail());
+            }
         }
         for (AivsStreamParser.Command command : commands) {
             handle(command);
@@ -148,6 +169,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     /** A new SPP session must not inherit a split AIVS header or an old reply task. */
     public synchronized void resetTransport() {
         generation++;
+        desyncCount = 0;
         sessionActive = false;
         finalizing = false;
         if (idleFinish != null) idleFinish.cancel(false);
@@ -201,11 +223,12 @@ public final class VoiceAssistantController implements AutoCloseable {
         }
     }
 
-    private synchronized void beginSession(AivsStreamParser.Command command,
-                                           VoiceAssistantSettings.Values settings) {
+    synchronized void beginSession(AivsStreamParser.Command command,
+                                   VoiceAssistantSettings.Values settings) {
         if (closed) return;
         resetCaptureLocked();
         generation++;
+        desyncCount = 0;
         sessionSettings = settings;
         sessionId = command.sessionId();
         ttsEnabled = command.ttsEnabled();
@@ -223,7 +246,7 @@ public final class VoiceAssistantController implements AutoCloseable {
                 + " gen=" + generation);
     }
 
-    private void appendAudio(byte[] data, VoiceAssistantSettings.Values settings) {
+    void appendAudio(byte[] data, VoiceAssistantSettings.Values settings) {
         if (data == null || data.length == 0) return;
         List<byte[]> ready;
         long now = System.currentTimeMillis();
@@ -251,7 +274,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         maybeStartPartial(settings, now);
     }
 
-    private void maybeStartPartial(VoiceAssistantSettings.Values settings, long now) {
+    void maybeStartPartial(VoiceAssistantSettings.Values settings, long now) {
         List<byte[]> window;
         long currentGeneration;
         String previous;
@@ -342,7 +365,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         finishCapture("speech-end", settings);
     }
 
-    private void finishCapture(String reason, VoiceAssistantSettings.Values settings) {
+    void finishCapture(String reason, VoiceAssistantSettings.Values settings) {
         List<byte[]> opus;
         byte[] stream;
         int sid;
@@ -581,6 +604,28 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private synchronized boolean isCurrent(long expectedGeneration) {
         return !closed && generation == expectedGeneration;
+    }
+
+    /** Test hook: waits until every turn queued before this call has completed. */
+    void awaitApiIdleForTest() {
+        CountDownLatch idle = new CountDownLatch(1);
+        try {
+            apiWorker.execute(idle::countDown);
+        } catch (RuntimeException rejected) {
+            return;
+        }
+        try {
+            if (!idle.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("VOICE_TEST_API_TIMEOUT");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("VOICE_TEST_INTERRUPTED", interrupted);
+        }
+    }
+
+    synchronized boolean partialInFlightForTest() {
+        return partialInFlight;
     }
 
     private void sendError(int sid, String text, boolean tts) {

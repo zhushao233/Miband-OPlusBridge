@@ -13,7 +13,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Minimal OpenAI-compatible transcription and chat-completions client. */
-public final class OpenAiVoiceClient {
+public final class OpenAiVoiceClient implements VoiceApiClient {
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 60_000;
     private static final int MAX_RESPONSE_BYTES = 128 * 1024;

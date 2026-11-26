@@ -7,6 +7,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public final class AivsStreamParserTest {
@@ -33,7 +34,9 @@ public final class AivsStreamParserTest {
     @Test public void dropsAShortTailInsteadOfStitchingTheNextSession() {
         AivsStreamParser parser = new AivsStreamParser();
         assertTrue(parser.feed(new byte[] {0x00, 0x01, 0x00, 0x02}).isEmpty());
-        assertTrue(parser.takeMalformed().contains("truncated"));
+        AivsStreamParser.Malformed malformed = parser.takeMalformed();
+        assertEquals(AivsStreamParser.MALFORMED_TRUNCATED, malformed.kind());
+        assertTrue(malformed.detail().contains("available=4"));
 
         List<AivsStreamParser.Command> commands =
                 parser.feed(new byte[] {0x00, 0x01, 0x00, 0x02, 0x07, 0x01});
@@ -46,8 +49,10 @@ public final class AivsStreamParserTest {
     @Test public void reportsTheDiscardedBlockAfterADesync() {
         AivsStreamParser parser = new AivsStreamParser();
         assertTrue(parser.feed(new byte[] {0x00, 0x09, 0x00, 0x01, 0x00}).isEmpty());
-        assertTrue(parser.takeMalformed().contains("type=9"));
-        assertEquals("", parser.takeMalformed());
+        AivsStreamParser.Malformed malformed = parser.takeMalformed();
+        assertEquals(AivsStreamParser.MALFORMED_DESYNC, malformed.kind());
+        assertTrue(malformed.detail().contains("type=9"));
+        assertNull(parser.takeMalformed());
     }
 
     @Test public void newSessionParsesCleanlyAfterATruncatedAudioTail() {
@@ -58,7 +63,8 @@ public final class AivsStreamParserTest {
         truncatedAudio[2] = 0x01;
         truncatedAudio[3] = (byte) 0x90;
         assertTrue(parser.feed(truncatedAudio).isEmpty());
-        assertTrue(parser.takeMalformed().contains("truncated"));
+        assertEquals(AivsStreamParser.MALFORMED_TRUNCATED,
+                parser.takeMalformed().kind());
 
         byte[] start = {0x00, 0x01, 0x00, 0x02, 0x00, 0x00};
         byte[] audio = new byte[404];
@@ -73,6 +79,19 @@ public final class AivsStreamParserTest {
         assertEquals(0, commands.get(0).sessionId());
         assertEquals(AivsStreamParser.TYPE_AUDIO, commands.get(1).type());
         assertEquals(400, commands.get(1).data().length);
+    }
+
+    @Test public void reportsInvalidVersionAndShortTailWithExplicitKinds() {
+        AivsStreamParser parser = new AivsStreamParser();
+        assertTrue(parser.feed(new byte[] {0x01, 0x01, 0x00, 0x00}).isEmpty());
+        AivsStreamParser.Malformed version = parser.takeMalformed();
+        assertEquals(AivsStreamParser.MALFORMED_DESYNC, version.kind());
+        assertTrue(version.detail().contains("version=1"));
+
+        assertTrue(parser.feed(new byte[] {0x00, 0x01, 0x00}).isEmpty());
+        AivsStreamParser.Malformed tail = parser.takeMalformed();
+        assertEquals(AivsStreamParser.MALFORMED_TRUNCATED, tail.kind());
+        assertTrue(tail.detail().contains("tail bytes=3"));
     }
 
     private static byte[] concat(byte[] first, byte[] second) {

@@ -19,6 +19,8 @@ public final class AivsStreamParser {
     public static final int TYPE_QUIT = 4;
     private static final int HEADER_BYTES = 4;
     private static final int MAX_BODY_BYTES = 16 * 1024;
+    public static final String MALFORMED_TRUNCATED = "truncated";
+    public static final String MALFORMED_DESYNC = "desync";
 
     public record Command(int type, byte[] data) {
         public Command {
@@ -38,7 +40,15 @@ public final class AivsStreamParser {
         }
     }
 
-    private String malformed = "";
+    public record Malformed(String kind, String detail) {
+        public Malformed {
+            if (!MALFORMED_TRUNCATED.equals(kind) && !MALFORMED_DESYNC.equals(kind)) {
+                throw new IllegalArgumentException("AIVS_MALFORMED_KIND");
+            }
+        }
+    }
+
+    private Malformed malformed;
 
     public List<Command> feed(byte[] chunk) {
         if (chunk == null || chunk.length == 0) return List.of();
@@ -50,15 +60,18 @@ public final class AivsStreamParser {
             int length = ((chunk[offset + 2] & 0xff) << 8) | (chunk[offset + 3] & 0xff);
             if (version != 0 || type < TYPE_START || type > TYPE_QUIT
                     || length > MAX_BODY_BYTES) {
-                malformed = "version=" + version + " type=" + type + " length=" + length
-                        + " available=" + (chunk.length - offset);
+                malformed = new Malformed(MALFORMED_DESYNC,
+                        "version=" + version + " type=" + type + " length=" + length
+                                + " available=" + (chunk.length - offset));
                 return commands;
             }
             if (chunk.length - offset - HEADER_BYTES < length) {
                 // The band emits whole AIVS blocks per SPP message. A short tail belongs to the
                 // closing session and must not be stitched onto the next session's START block.
-                malformed = "truncated version=" + version + " type=" + type
-                        + " length=" + length + " available=" + (chunk.length - offset);
+                malformed = new Malformed(MALFORMED_TRUNCATED,
+                        "version=" + version + " type=" + type
+                                + " length=" + length + " available="
+                                + (chunk.length - offset));
                 return commands;
             }
             byte[] body = Arrays.copyOfRange(chunk, offset + HEADER_BYTES,
@@ -67,19 +80,20 @@ public final class AivsStreamParser {
             offset += HEADER_BYTES + length;
         }
         if (offset < chunk.length) {
-            malformed = "tail bytes=" + (chunk.length - offset);
+            malformed = new Malformed(MALFORMED_TRUNCATED,
+                    "tail bytes=" + (chunk.length - offset));
         }
         return commands;
     }
 
     public void reset() {
-        malformed = "";
+        malformed = null;
     }
 
-    /** Returns and clears the last discarded block, for a single low-frequency diagnostic line. */
-    public String takeMalformed() {
-        String value = malformed;
-        malformed = "";
+    /** Returns and clears the last discarded block, or null when the input was clean. */
+    public Malformed takeMalformed() {
+        Malformed value = malformed;
+        malformed = null;
         return value;
     }
 }
