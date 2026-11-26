@@ -859,7 +859,8 @@ public final class BandLiveService extends Service {
         }
         long now = System.currentTimeMillis();
         synchronized (voiceCommandLock) {
-            if (pendingDestructiveKind == kind && now <= pendingDestructiveUntil) {
+            if (command.confirmed()
+                    && pendingDestructiveKind == kind && now <= pendingDestructiveUntil) {
                 pendingDestructiveKind = null;
                 pendingDestructiveUntil = 0;
                 return null;

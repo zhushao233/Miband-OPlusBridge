@@ -5,7 +5,9 @@ import java.time.LocalTime;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public final class WatchCommandParserTest {
     private static final LocalTime NOW = LocalTime.of(10, 15);
@@ -56,8 +58,21 @@ public final class WatchCommandParserTest {
 
         assertEquals(WatchCommand.Kind.DELETE_ALL_ALARMS,
                 WatchCommandParser.parse("取消所有闹钟", NOW).kind());
+        assertFalse(WatchCommandParser.parse("取消所有闹钟", NOW).confirmed());
         assertEquals(WatchCommand.Kind.LIST_ALARMS,
                 WatchCommandParser.parse("查看闹钟", NOW).kind());
+    }
+
+    @Test public void destructiveCommandsRequireAnExplicitConfirmationKeyword() {
+        var all = WatchCommandParser.parse("我确认取消所有闹钟", NOW);
+        assertEquals(WatchCommand.Kind.DELETE_ALL_ALARMS, all.kind());
+        assertTrue(all.confirmed());
+
+        var next = WatchCommandParser.parse("确认取消闹钟", NOW);
+        assertEquals(WatchCommand.Kind.DELETE_NEXT_ALARM, next.kind());
+        assertTrue(next.confirmed());
+
+        assertFalse(WatchCommandParser.parse("取消闹钟", NOW).confirmed());
     }
 
     @Test public void missingTimeOrDurationAsksForIt() {
@@ -86,6 +101,7 @@ public final class WatchCommandParserTest {
         var on = WatchCommandParser.parse("打开勿扰", NOW);
         assertEquals(WatchCommand.Kind.SET_DND, on.kind());
         assertEquals(true, on.enabled());
+        assertFalse(on.confirmed());
 
         var off = WatchCommandParser.parse("关闭勿扰模式", NOW);
         assertEquals(WatchCommand.Kind.SET_DND, off.kind());

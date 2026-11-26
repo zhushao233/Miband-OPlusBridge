@@ -3,7 +3,7 @@ package io.github.miam1ku.mibandoplusbridge.voice;
 
 /** A locally recognised watch action. Unrecognised speech still goes to the chat model. */
 public record WatchCommand(Kind kind, int hour, int minute, int minutes, boolean daily,
-                           boolean all, boolean enabled, WatchApp app) {
+                           boolean all, boolean enabled, WatchApp app, boolean confirmed) {
     public enum Kind {
         SET_ALARM,
         SET_TIMER,
@@ -60,30 +60,37 @@ public record WatchCommand(Kind kind, int hour, int minute, int minutes, boolean
     }
 
     public static WatchCommand alarm(int hour, int minute, boolean daily) {
-        return new WatchCommand(Kind.SET_ALARM, hour, minute, 0, daily, false, false, null);
+        return new WatchCommand(Kind.SET_ALARM, hour, minute, 0, daily, false, false, null, false);
     }
 
     public static WatchCommand timer(int minutes) {
-        return new WatchCommand(Kind.SET_TIMER, -1, -1, minutes, false, false, false, null);
+        return new WatchCommand(Kind.SET_TIMER, -1, -1, minutes, false, false, false, null, false);
     }
 
     public static WatchCommand deleteAt(int hour, int minute) {
-        return new WatchCommand(Kind.DELETE_ALARM_AT, hour, minute, 0, false, false, false, null);
+        return new WatchCommand(Kind.DELETE_ALARM_AT, hour, minute, 0, false, false, false,
+                null, false);
     }
 
     public static WatchCommand of(Kind kind) {
-        return new WatchCommand(kind, -1, -1, 0, false, false, false, null);
+        return new WatchCommand(kind, -1, -1, 0, false, false, false, null, false);
     }
 
     public static WatchCommand deleteAll() {
-        return new WatchCommand(Kind.DELETE_ALL_ALARMS, -1, -1, 0, false, true, false, null);
+        return new WatchCommand(Kind.DELETE_ALL_ALARMS, -1, -1, 0, false, true, false,
+                null, false);
     }
 
     public static WatchCommand dnd(boolean enabled) {
-        return new WatchCommand(Kind.SET_DND, -1, -1, 0, false, false, enabled, null);
+        return new WatchCommand(Kind.SET_DND, -1, -1, 0, false, false, enabled, null, false);
     }
 
     public static WatchCommand app(WatchApp app) {
-        return new WatchCommand(Kind.OPEN_WATCH_APP, -1, -1, 0, false, false, true, app);
+        return new WatchCommand(Kind.OPEN_WATCH_APP, -1, -1, 0, false, false, true, app, false);
+    }
+
+    public WatchCommand withConfirmed(boolean confirmed) {
+        if (this.confirmed == confirmed) return this;
+        return new WatchCommand(kind, hour, minute, minutes, daily, all, enabled, app, confirmed);
     }
 }

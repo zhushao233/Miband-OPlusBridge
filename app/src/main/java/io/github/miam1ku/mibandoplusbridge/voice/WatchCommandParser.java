@@ -54,59 +54,71 @@ public final class WatchCommandParser {
         if (raw == null) return null;
         String text = normalize(raw);
         if (text.isBlank()) return null;
+        boolean confirmed = text.startsWith("确认")
+                || containsAny(text, "确认删除", "确认取消");
 
         if (containsAny(text, "找手机", "查找手机", "查找我的手机", "找我的手机",
                 "找一下手机", "手机在哪", "手机在哪里")) {
-            return WatchCommand.of(WatchCommand.Kind.FIND_PHONE);
+            return withConfirmation(WatchCommand.of(WatchCommand.Kind.FIND_PHONE), confirmed);
         }
         if (containsAny(text, "暂停音乐", "暂停播放", "停止播放", "把音乐暂停")) {
-            return WatchCommand.of(WatchCommand.Kind.PAUSE_MUSIC);
+            return withConfirmation(WatchCommand.of(WatchCommand.Kind.PAUSE_MUSIC), confirmed);
         }
         if (containsAny(text, "勿扰", "免打扰")) {
             if (containsAny(text, "关闭", "关掉", "退出", "取消", "解除")) {
-                return WatchCommand.dnd(false);
+                return withConfirmation(WatchCommand.dnd(false), confirmed);
             }
             if (containsAny(text, "打开", "开启", "进入", "设置")) {
-                return WatchCommand.dnd(true);
+                return withConfirmation(WatchCommand.dnd(true), confirmed);
             }
         }
         WatchCommand.WatchApp app = watchApp(text);
-        if (app != null) return WatchCommand.app(app);
+        if (app != null) return withConfirmation(WatchCommand.app(app), confirmed);
 
         boolean alarm = containsAny(text, "闹钟", "闹鈴", "闹铃");
         boolean timer = containsAny(text, "计时", "倒计时", "定时");
         boolean reminder = containsAny(text, "提醒我", "叫我", "叫醒我", "喊我");
 
         if (alarm && containsAny(text, "查看", "看看", "有哪些", "列表", "还有几个", "几个闹钟")) {
-            return WatchCommand.of(WatchCommand.Kind.LIST_ALARMS);
+            return withConfirmation(WatchCommand.of(WatchCommand.Kind.LIST_ALARMS), confirmed);
         }
 
         boolean cancel = containsAny(text, "取消", "关闭", "关掉", "删除", "删掉", "停止");
         if ((alarm || timer) && cancel) {
             if (containsAny(text, "所有", "全部", "都取消", "都关")) {
-                return WatchCommand.deleteAll();
+                return withConfirmation(WatchCommand.deleteAll(), confirmed);
             }
             TimeTarget at = absoluteTime(text, now);
-            return at != null && !at.relative()
+            return withConfirmation(at != null && !at.relative()
                     ? WatchCommand.deleteAt(at.hour(), at.minute())
-                    : WatchCommand.of(WatchCommand.Kind.DELETE_NEXT_ALARM);
+                    : WatchCommand.of(WatchCommand.Kind.DELETE_NEXT_ALARM), confirmed);
         }
 
         TimeTarget target = anyTime(text, now);
         if (timer || (target != null && target.relative())) {
             if (target == null || !target.relative()) {
-                return WatchCommand.of(WatchCommand.Kind.ASK_DURATION);
+                return withConfirmation(WatchCommand.of(WatchCommand.Kind.ASK_DURATION), confirmed);
             }
-            return WatchCommand.timer(target.minutes());
+            return withConfirmation(WatchCommand.timer(target.minutes()), confirmed);
         }
 
         if (alarm || reminder) {
-            if (target == null) return WatchCommand.of(WatchCommand.Kind.ASK_ALARM_TIME);
-            if (target.relative()) return WatchCommand.timer(target.minutes());
+            if (target == null) {
+                return withConfirmation(WatchCommand.of(WatchCommand.Kind.ASK_ALARM_TIME),
+                        confirmed);
+            }
+            if (target.relative()) {
+                return withConfirmation(WatchCommand.timer(target.minutes()), confirmed);
+            }
             boolean daily = containsAny(text, "每天", "每日", "天天");
-            return WatchCommand.alarm(target.hour(), target.minute(), daily);
+            return withConfirmation(
+                    WatchCommand.alarm(target.hour(), target.minute(), daily), confirmed);
         }
         return null;
+    }
+
+    private static WatchCommand withConfirmation(WatchCommand command, boolean confirmed) {
+        return command == null ? null : command.withConfirmed(confirmed);
     }
 
     private static WatchCommand.WatchApp watchApp(String text) {
