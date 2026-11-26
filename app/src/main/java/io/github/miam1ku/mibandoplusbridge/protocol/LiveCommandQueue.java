@@ -103,6 +103,7 @@ public final class LiveCommandQueue implements AutoCloseable {
     private final boolean[] retiredRawAck = new boolean[256];
     private int nextSequence;
     private int swallowedRetiredRawAcks;
+    private int droppedNotificationsForRaw;
     private boolean drainScheduled;
     private ScheduledFuture<?> sequenceWake;
     private boolean closed;
@@ -162,6 +163,7 @@ public final class LiveCommandQueue implements AutoCloseable {
             }
             if (ordinary >= CAPACITY) {
                 if (disposable == null) return failedVoid("LIVE_QUEUE_FULL");
+                droppedNotificationsForRaw++;
                 finishLocked(disposable, null, failure("LIVE_NOTIFICATION_DROPPED"));
             }
             Work item = new Work(payload, timeoutMillis);
@@ -272,6 +274,12 @@ public final class LiveCommandQueue implements AutoCloseable {
     public int swallowedRetiredRawAcks() {
         synchronized (lock) {
             return swallowedRetiredRawAcks;
+        }
+    }
+
+    public int droppedNotificationsForRaw() {
+        synchronized (lock) {
+            return droppedNotificationsForRaw;
         }
     }
 

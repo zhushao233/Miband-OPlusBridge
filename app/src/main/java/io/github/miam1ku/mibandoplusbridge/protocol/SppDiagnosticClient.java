@@ -85,6 +85,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private UnknownDataObserver unknownDataObserver;
     private Consumer<java.util.List<BandHistoryParser.Measurement>> onSleepFile;
     private volatile LiveCommandQueue liveCommands;
+    private int unsupportedProtobufFrames;
     private final DeviceLogMassGate deviceLogGate;
     private Result verifiedDevice;
     private boolean liveHold;
@@ -97,6 +98,14 @@ public final class SppDiagnosticClient implements AutoCloseable {
 
     public int notificationPayloadLimit() {
         return liveCommands == null || closed ? 0 : Math.max(0, peerPayloadLimit - 2);
+    }
+
+    int unsupportedProtobufFrames() {
+        return unsupportedProtobufFrames;
+    }
+
+    static boolean shouldLogUnsupportedFrame(int count) {
+        return count == 1 || count % 100 == 0;
     }
 
     /** Optional experimental channels are observed; their sequence counters never advance commands. */
@@ -1210,7 +1219,11 @@ public final class SppDiagnosticClient implements AutoCloseable {
         } catch (com.google.protobuf.InvalidProtocolBufferException notACommand) {
             // AIVS is routed by its explicit voice channel, never by whether a payload happens
             // to parse as XiaomiProto.Command. Keep the session alive and record the mismatch.
-            SessionLog.line(context, "VOICE_UNSUPPORTED channel=1 protobuf=true seq=" + sequence);
+            unsupportedProtobufFrames++;
+            if (shouldLogUnsupportedFrame(unsupportedProtobufFrames)) {
+                SessionLog.line(context, "VOICE_UNSUPPORTED channel=1 protobuf=true seq="
+                        + sequence + " count=" + unsupportedProtobufFrames);
+            }
             sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_ACK, sequence, new byte[0]));
             Arrays.fill(plaintext, (byte) 0);
             return null;
@@ -1535,14 +1548,21 @@ public final class SppDiagnosticClient implements AutoCloseable {
     }
 
     @Override public void close() {
+        LiveCommandQueue commands = liveCommands;
         if (closeLogged.compareAndSet(false, true)) {
             SessionLog.line(context, "spp close reason=" + closeReason
                     + " linkStop=" + (linkStop == null ? "" : linkStop)
                     + " framing=" + framing + " auth=" + authenticated
                     + " live=" + liveHold);
+            if (commands != null) {
+                int dropped = commands.droppedNotificationsForRaw();
+                if (dropped > 0) {
+                    SessionLog.line(context, "VOICE_QUEUE dropped-notifications=" + dropped);
+                }
+            }
         }
+        unsupportedProtobufFrames = 0;
         cancelDeviceLogReceive("MASS_RECEIVE_CANCELLED");
-        LiveCommandQueue commands = liveCommands;
         if (commands != null) commands.close(new IllegalStateException("SESSION_CLOSED"));
         BluetoothSocket closing;
         BleGattClient gatt;

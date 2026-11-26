@@ -103,6 +103,36 @@ public final class LiveCommandQueueTest {
         }
     }
 
+    @Test public void rawAivsCountsAReplacedNotificationAtCapacity() throws Exception {
+        BlockingQueue<Integer> commandWrites = new LinkedBlockingQueue<>();
+        BlockingQueue<Integer> rawWrites = new LinkedBlockingQueue<>();
+        CountDownLatch gate = new CountDownLatch(1);
+        try (var queue = new LiveCommandQueue(0, SESSION_TIMEOUT_MS,
+                (sequence, command) -> {
+                    commandWrites.add(sequence);
+                    gate.await(WAIT_SECONDS, TimeUnit.SECONDS);
+                },
+                (sequence, payload) -> rawWrites.add(sequence))) {
+            var first = queue.send(command(3, 0));
+            assertNotNull(commandWrites.poll(WAIT_SECONDS, TimeUnit.SECONDS));
+            for (int i = 1; i < 63; i++) queue.send(command(3, i));
+            var notification = queue.send(notification(1));
+            var raw = queue.sendRaw(new byte[] {(byte) 0x08, 0x0e});
+
+            assertEquals(1, queue.droppedNotificationsForRaw());
+            assertFailure(notification, Throwable.class);
+
+            gate.countDown();
+            Integer rawSequence = rawWrites.poll(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertNotNull(rawSequence);
+            queue.onRawWritten(rawSequence);
+            await(raw);
+            assertFalse(first.toCompletableFuture().isDone());
+        } finally {
+            gate.countDown();
+        }
+    }
+
     @Test public void ackRegisteredBeforeWriteCanArriveInsideSender() throws Exception {
         AtomicReference<LiveCommandQueue> owner = new AtomicReference<>();
         try (var queue = new LiveCommandQueue(0, SESSION_TIMEOUT_MS, (sequence, outgoing) -> {
