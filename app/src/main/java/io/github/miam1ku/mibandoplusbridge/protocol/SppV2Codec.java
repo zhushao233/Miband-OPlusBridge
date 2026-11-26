@@ -35,6 +35,8 @@ public final class SppV2Codec {
     public static final int CHANNEL_DATA = 2;
     /** Voice-page audio blocks. Opcode 2 payloads use the same SPP V2 session stream cipher. */
     public static final int CHANNEL_VOICE = 3;
+    /** Sensor / device-log raw file channel used by some firmwares during log export. */
+    public static final int CHANNEL_FILE_SENSOR = 4;
     public static final int CHANNEL_ACTIVITY = 5;
     /** Network proxy traffic. It does not participate in the ordinary receive cursor. */
     public static final int CHANNEL_NETWORK = 7;

@@ -42,6 +42,7 @@ public final class BandLiveService extends Service {
     private static volatile BandLiveService instance;
     private static volatile long pendingManualSyncAtMs;
     private static volatile String pendingManualSyncRequestId = "";
+    private static final Object DEVICE_LOG_LOCK = new Object();
     private static volatile io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive deviceLogReceiver;
     private static volatile boolean diagnosticPaused;
     private volatile java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(0);
@@ -77,6 +78,11 @@ public final class BandLiveService extends Service {
     private static final long NIGHT_STATS_REFRESH_MINUTES = 60;
     private static final int AWAKE_CONFIRM_SAMPLES = 2;
     private static final int SLEEP_STATE_MISS_LIMIT = 2;
+    /** A band sleep report older than this is re-asked before any history request. */
+    private static final long SLEEP_STATE_FRESH_MINUTES = 5;
+    /** Second AWAKE sample during the late hold; the first is often minutes after waking. */
+    private static final long LATE_AWAKE_CONFIRM_SECONDS = 60;
+    private static final long DAY_ASLEEP_DEFER_HOURS = 3;
     private static final long NIGHT_RESTART_COOLDOWN_MINUTES = 60;
     private static final String LIVE_PREFS = "live-service";
     private static final String LAST_NIGHT_FLUSH = "lastNightFlushAtMs";
@@ -131,6 +137,10 @@ public final class BandLiveService extends Service {
             new io.github.miam1ku.mibandoplusbridge.notify.NotifyDedupe();
     private static final io.github.miam1ku.mibandoplusbridge.notify.NotifyReplay HELD_NOTIFICATIONS =
             new io.github.miam1ku.mibandoplusbridge.notify.NotifyReplay();
+    private final io.github.miam1ku.mibandoplusbridge.notify.NotifyCoalescer notifyCoalescer =
+            new io.github.miam1ku.mibandoplusbridge.notify.NotifyCoalescer();
+    private final Object coalescerLock = new Object();
+    private java.util.concurrent.ScheduledFuture<?> coalescerFlush;
     private final java.util.ArrayDeque<String> iconPackages = new java.util.ArrayDeque<>();
     private final AtomicBoolean iconUploadBusy = new AtomicBoolean();
     private volatile String iconPackage;
@@ -172,10 +182,16 @@ public final class BandLiveService extends Service {
     private volatile boolean sleepPauseOn;
     private volatile long sleepArmedAtMs = Long.MAX_VALUE;
     private volatile Boolean bandAsleep;
+    /** Wall time of the last 2/78 or 2/79 report behind {@link #bandAsleep}. */
+    private volatile long bandAsleepAtMs;
+    /** First deferral of the pending pull; 0 when nothing is held. */
+    private volatile long historyDeferredSinceMs;
     private volatile boolean sleepStateUnsupported;
     private int sleepStateMisses;
     private volatile boolean waitingForInitialSleepState;
     private volatile boolean historySyncPending;
+    /** Last deferred verdict written to the session log; identical repeats are dropped. */
+    private volatile String lastHistoryDeferLine;
     private volatile boolean pendingHistoryIncludesHistory;
     private volatile long historyCooldownUntilMs;
     private long historyStateDeadlineAt;
@@ -506,50 +522,117 @@ public final class BandLiveService extends Service {
                 };
         var receiver = new io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive(
                 directory, safe);
-        if (deviceLogReceiver != null) {
-            return java.util.concurrent.CompletableFuture.failedFuture(
-                    new IllegalStateException("DEVICE_LOG_RECEIVE_ACTIVE"));
+        synchronized (DEVICE_LOG_LOCK) {
+            if (deviceLogReceiver != null) {
+                return java.util.concurrent.CompletableFuture.failedFuture(
+                        new IllegalStateException("DEVICE_LOG_RECEIVE_ACTIVE"));
+            }
+            deviceLogReceiver = receiver;
         }
-        deviceLogReceiver = receiver;
+        final long startedAtNanos = System.nanoTime();
+        final java.util.concurrent.atomic.AtomicLong reportAcceptedAtNanos =
+                new java.util.concurrent.atomic.AtomicLong(0L);
         try {
-            client.beginDeviceLogReceive(receiver);
+            client.beginDeviceLogReceive(receiver, () ->
+                    reportAcceptedAtNanos.compareAndSet(0L, System.nanoTime()));
         } catch (Exception unavailable) {
-            deviceLogReceiver = null;
+            synchronized (DEVICE_LOG_LOCK) {
+                if (deviceLogReceiver == receiver) deviceLogReceiver = null;
+            }
             return java.util.concurrent.CompletableFuture.failedFuture(unavailable);
         }
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
                 "DEVICE_LOG_EXPORT request");
-        return queue.request(
-                io.github.miam1ku.mibandoplusbridge.protocol.BandLogCommand.exportDeviceLog(),
-                2, 81, 120_000L)
-                .thenCompose(response -> {
-                    int status = io.github.miam1ku.mibandoplusbridge.protocol.BandLogCommand
-                            .resultStatus(response);
-                    if (status != 0) {
-                        client.cancelDeviceLogReceive(deviceLogStatus(status));
-                        return java.util.concurrent.CompletableFuture.failedFuture(
-                                new IllegalStateException(deviceLogStatus(status)));
+        java.util.concurrent.CompletableFuture<
+                io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive.Result>
+                completion = receiver.completion().toCompletableFuture();
+        // Watchdog modeled on Xiaomi's reverse-MASS export lifecycle:
+        // - up to 180s for the band to pack logs and either answer 2/81 or start streaming MASS;
+        // - up to 60s after 2/81 SUCCESS for the first MASS fragment to arrive;
+        // - up to 30s idle between MASS fragments once streaming has begun;
+        // - 10 minute hard cap for very large log bundles.
+        java.util.concurrent.ScheduledFuture<?> watchdog = live.coordinator.scheduleAtFixedRate(() -> {
+            if (completion.isDone()) return;
+            long now = System.nanoTime();
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(now - startedAtNanos);
+            if (elapsedMs >= TimeUnit.MINUTES.toMillis(10)) {
+                client.cancelDeviceLogReceive(receiver, "DEVICE_LOG_STREAM_STALLED");
+                return;
+            }
+            if (receiver.hasStarted()) {
+                long lastActivity = receiver.lastActivityNanos();
+                if (lastActivity > 0 && TimeUnit.NANOSECONDS.toMillis(now - lastActivity) >= 30_000L) {
+                    client.cancelDeviceLogReceive(receiver, "DEVICE_LOG_STREAM_STALLED");
+                }
+                return;
+            }
+            long acceptedAt = reportAcceptedAtNanos.get();
+            if (acceptedAt > 0) {
+                if (TimeUnit.NANOSECONDS.toMillis(now - acceptedAt) >= 60_000L) {
+                    client.cancelDeviceLogReceive(receiver, "DEVICE_LOG_STREAM_TIMEOUT");
+                }
+                return;
+            }
+            if (elapsedMs >= 180_000L) {
+                client.cancelDeviceLogReceive(receiver, "LIVE_COMMAND_TIMEOUT");
+            }
+        }, 5, 5, TimeUnit.SECONDS);
+        // Send 2/80 without blocking completion on 2/81: some firmwares stream reverse MASS
+        // immediately and send 2/81 at the end (or not at all), while 2/81 errors are handled
+        // synchronously by DeviceLogMassGate on the reader thread.
+        queue.send(io.github.miam1ku.mibandoplusbridge.protocol.BandLogCommand.exportDeviceLog())
+                .whenComplete((ignored, sendError) -> {
+                    if (sendError != null && !completion.isDone()) {
+                        client.cancelDeviceLogReceive(receiver, unwrapFailureCode(sendError));
                     }
-                    io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
-                            "DEVICE_LOG_EXPORT receiving");
-                    java.util.concurrent.CompletableFuture<
-                            io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive.Result>
-                            completion = receiver.completion().toCompletableFuture();
-                    completion.orTimeout(10, TimeUnit.MINUTES);
-                    return completion.whenComplete((result, error) -> {
-                        if (error != null) {
-                            client.cancelDeviceLogReceive("DEVICE_LOG_RECEIVE_FAILED");
-                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
-                                    "DEVICE_LOG_EXPORT failed " + error.getClass().getSimpleName());
-                        } else {
-                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
-                                    "DEVICE_LOG_EXPORT complete bytes=" + result.bytes());
-                        }
-                    });
-                }).whenComplete((result, error) -> {
-                    deviceLogReceiver = null;
-                    if (error != null) client.cancelDeviceLogReceive("DEVICE_LOG_EXPORT_FAILED");
                 });
+        return completion.whenComplete((result, error) -> {
+            watchdog.cancel(false);
+            synchronized (DEVICE_LOG_LOCK) {
+                if (deviceLogReceiver == receiver) deviceLogReceiver = null;
+            }
+            if (error != null) {
+                String code = unwrapFailureCode(error);
+                client.cancelDeviceLogReceive(receiver, code);
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
+                        "DEVICE_LOG_EXPORT failed " + code);
+            } else {
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
+                        "DEVICE_LOG_EXPORT complete bytes=" + result.bytes());
+            }
+        });
+    }
+
+    /** Cancels an in-flight device-log pull so subsequent pulls are not blocked by DEVICE_LOG_RECEIVE_ACTIVE. */
+    public static void cancelDeviceLogExport(String reason) {
+        String code = reason == null || reason.isBlank() ? "DEVICE_LOG_CANCELLED" : reason;
+        io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive active;
+        synchronized (DEVICE_LOG_LOCK) {
+            active = deviceLogReceiver;
+            deviceLogReceiver = null;
+        }
+        if (active == null) return;
+        BandLiveService live = instance;
+        SppDiagnosticClient client = live == null ? null : live.client;
+        io.github.miam1ku.mibandoplusbridge.protocol.LiveCommandQueue queue = live == null ? null : live.commands;
+        if (client != null) client.cancelDeviceLogReceive(active, code);
+        else active.fail(code);
+        if (queue != null) {
+            queue.cancelResponse(2,
+                    io.github.miam1ku.mibandoplusbridge.protocol.BandLogCommand.RESULT_SUBTYPE,
+                    code);
+        }
+    }
+
+    private static String unwrapFailureCode(Throwable error) {
+        Throwable cause = error;
+        while ((cause instanceof java.util.concurrent.CompletionException
+                || cause instanceof java.util.concurrent.ExecutionException) && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        String message = cause.getMessage();
+        if (message != null && message.matches("[A-Z0-9_]{3,64}")) return message;
+        return cause.getClass().getSimpleName();
     }
 
     public static io.github.miam1ku.mibandoplusbridge.protocol.XiaomiMassReceive.Progress
@@ -562,13 +645,7 @@ public final class BandLiveService extends Service {
     }
 
     private static String deviceLogStatus(int status) {
-        return switch (status) {
-            case 1 -> "DEVICE_LOG_NO_DATA";
-            case 2 -> "DEVICE_LOG_DIRECT_UPLOAD_UNSUPPORTED";
-            case 3 -> "DEVICE_LOG_DEVICE_BUSY";
-            case 10 -> "DEVICE_LOG_DEVICE_REJECTED";
-            default -> "DEVICE_LOG_RESULT_INVALID";
-        };
+        return io.github.miam1ku.mibandoplusbridge.protocol.BandLogCommand.statusCode(status);
     }
 
     public static void refreshWeather(Context context) {
@@ -715,6 +792,9 @@ public final class BandLiveService extends Service {
         try {
             var fitted = io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand.fitToPayload(command,
                     notificationPayloadLimit());
+            if (ordinaryPost(fitted) || ordinaryDismiss(fitted)) {
+                return live.enqueueOrdinaryNotification(fitted);
+            }
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context, "NOTIFY_OUT type=" + fitted.getType()
                     + " subtype=" + fitted.getSubtype() + " bytes=" + fitted.getSerializedSize());
             noteIconPackage(fitted);
@@ -755,6 +835,9 @@ public final class BandLiveService extends Service {
         try {
             var fitted = io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand.fitToPayload(
                     command, notificationPayloadLimit());
+            if (ordinaryPost(fitted) || ordinaryDismiss(fitted)) {
+                return live.enqueueOrdinaryNotification(fitted);
+            }
             android.util.Log.i("OplusBandBridge", "NOTIFY_OUT type=" + fitted.getType()
                     + " subtype=" + fitted.getSubtype() + " bytes=" + fitted.getSerializedSize()
                     + " limit=" + notificationPayloadLimit());
@@ -838,6 +921,13 @@ public final class BandLiveService extends Service {
         try {
             var fitted = io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand.fitToPayload(
                     command, notificationPayloadLimit());
+            if (ordinaryPost(fitted) || ordinaryDismiss(fitted)) {
+                enqueueOrdinaryNotification(fitted).whenComplete((ignored, error) -> {
+                    if (error == null) held.succeed();
+                    else held.fail(error);
+                });
+                return;
+            }
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, "NOTIFY_OUT type=" + fitted.getType()
                     + " subtype=" + fitted.getSubtype() + " bytes=" + fitted.getSerializedSize());
             noteIconPackage(fitted);
@@ -868,8 +958,7 @@ public final class BandLiveService extends Service {
     private static boolean duplicate(Context context,
             nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
         if (command == null || (!ordinaryPost(command) && !ordinaryDismiss(command))) return false;
-        if (NOTIFICATIONS.first(io.github.miam1ku.mibandoplusbridge.notify.NotifyDedupe.identity(command),
-                android.os.SystemClock.elapsedRealtime())) return false;
+        if (NOTIFICATIONS.first(command, android.os.SystemClock.elapsedRealtime())) return false;
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context, "NOTIFY_DROP reason=duplicate");
         return true;
     }
@@ -887,7 +976,97 @@ public final class BandLiveService extends Service {
     public static void cancelNotifications(Context context) {
         BandLiveService live = instance;
         var queue = live == null ? null : live.commands;
+        if (live != null) live.cancelCoalescedNotifications(new IllegalStateException("NOTIFICATION_CANCELLED"));
         if (queue != null) queue.cancelNotifications(new IllegalStateException("NOTIFICATION_CANCELLED"));
+    }
+
+    private java.util.concurrent.CompletionStage<Void> enqueueOrdinaryNotification(
+            nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command fitted) {
+        var waiter = notifyCoalescer.offer(fitted, android.os.SystemClock.elapsedRealtime());
+        scheduleCoalescerFlush();
+        return waiter;
+    }
+
+    private void scheduleCoalescerFlush() {
+        long dueAt = notifyCoalescer.nextDueAtMs();
+        synchronized (coalescerLock) {
+            if (coalescerFlush != null) {
+                coalescerFlush.cancel(false);
+                coalescerFlush = null;
+            }
+            if (dueAt == Long.MAX_VALUE || stopRequested) return;
+            long delay = Math.max(1L, dueAt - android.os.SystemClock.elapsedRealtime());
+            try {
+                coalescerFlush = coordinator.schedule(this::flushCoalescedNotifications, delay, TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException stopping) {
+                notifyCoalescer.failAll(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
+            }
+        }
+    }
+
+    private void flushCoalescedNotifications() {
+        synchronized (coalescerLock) {
+            coalescerFlush = null;
+        }
+        io.github.miam1ku.mibandoplusbridge.notify.NotifyCoalescer.Entry entry;
+        while ((entry = notifyCoalescer.pollNext(android.os.SystemClock.elapsedRealtime())) != null) {
+            var current = entry;
+            var queue = commands;
+            if (queue != null && notificationSessionReady(this)) {
+                android.util.Log.i("OplusBandBridge", "NOTIFY_OUT type=" + current.command.getType()
+                        + " subtype=" + current.command.getSubtype() + " bytes=" + current.command.getSerializedSize()
+                        + " limit=" + notificationPayloadLimit());
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, "NOTIFY_OUT type="
+                        + current.command.getType() + " subtype=" + current.command.getSubtype()
+                        + " bytes=" + current.command.getSerializedSize());
+                noteIconPackage(current.command);
+                queue.send(current.command).whenComplete((ignored, error) -> {
+                    if (error == null) current.succeed();
+                    else current.fail(error);
+                });
+            } else if (mayWake(this)) {
+                holdNotification(this, current.command).whenComplete((ignored, error) -> {
+                    if (error == null) current.succeed();
+                    else current.fail(error);
+                });
+            } else {
+                current.fail(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
+            }
+        }
+        scheduleCoalescerFlush();
+    }
+
+    private void cancelCoalescedNotifications(Throwable reason) {
+        synchronized (coalescerLock) {
+            if (coalescerFlush != null) {
+                coalescerFlush.cancel(false);
+                coalescerFlush = null;
+            }
+        }
+        notifyCoalescer.failAll(reason);
+    }
+
+    private void onCoalescerDisconnected() {
+        synchronized (coalescerLock) {
+            if (coalescerFlush != null) {
+                coalescerFlush.cancel(false);
+                coalescerFlush = null;
+            }
+        }
+        notifyCoalescer.resetSession();
+        var pending = notifyCoalescer.drainAll();
+        if (pending.isEmpty()) return;
+        boolean wake = mayWake(this);
+        for (var entry : pending) {
+            if (wake) {
+                holdNotification(this, entry.command).whenComplete((ignored, error) -> {
+                    if (error == null) entry.succeed();
+                    else entry.fail(error);
+                });
+            } else {
+                entry.fail(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
+            }
+        }
     }
 
     public static void cancelCall(Context context) {
@@ -1181,6 +1360,8 @@ public final class BandLiveService extends Service {
                         nextHealthAt = now + TimeUnit.MINUTES.toNanos(historyPeriodMinutes(false));
                         nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
                         bandAsleep = null;
+                        bandAsleepAtMs = 0;
+                        historyDeferredSinceMs = 0;
                         awakeSamples = 0;
                         quietStepsValue = Long.MIN_VALUE;
                         quietCheckedAtMs = 0;
@@ -1191,6 +1372,7 @@ public final class BandLiveService extends Service {
                         nightHadQuiet = false;
                         wakeEvidence.reset();
                         wakeEvidenceCheckedAtMs = 0;
+                        lastHistoryDeferLine = null;
                         boolean evidence = wakeEvidence(sessionStartAtMs);
                         boolean night = inActiveProtectionWindow(evidence);
                         nextHealthAt = now + TimeUnit.MINUTES.toNanos(
@@ -1233,7 +1415,8 @@ public final class BandLiveService extends Service {
                             }, REALTIME_STATS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                         }
                         syncDnd();
-                        requestSleepState();
+                        // Baseline at every hour: the initial history pull waits for it.
+                        requestSleepState(true);
                         });
                     }, fileId -> coordinator.execute(() -> {
                         if (client == active && !stopRequested && historySync != null) historySync.saved(fileId);
@@ -1248,7 +1431,8 @@ public final class BandLiveService extends Service {
                             coordinator.execute(() -> {
                                 if (epoch == sessionEpoch) noteSleep(command);
                             });
-                        } else if (command.getType() == 10 || command.getType() == 7 || command.getType() == 18) {
+                        } else if (command.getType() == 10 || command.getType() == 7 || command.getType() == 18
+                                || deviceLogReceiver != null) {
                             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(BandLiveService.this,
                                     "rx type=" + command.getType() + " subtype=" + command.getSubtype()
                                             + " status=" + command.getStatus());
@@ -1337,6 +1521,7 @@ public final class BandLiveService extends Service {
                     } catch (java.util.concurrent.RejectedExecutionException stopping) { }
                     weatherSync.onDisconnected();
                     calls.disconnected();
+                    onCoalescerDisconnected();
                     io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.connectionChanged();
                     try { repository.markSessionClosed(); } catch (RuntimeException ignored) { }
                 }
@@ -1491,13 +1676,34 @@ public final class BandLiveService extends Service {
                 sleepProtectionWindow, minuteOfDay(), wakeEvidence);
     }
 
-    static boolean shouldPollSleepState(int hour, boolean nightTrackingEnabled) {
-        return nightTrackingEnabled && isNightWindow(hour);
+    /**
+     * The band's own sleep state is the cheapest wake evidence. History stays gated until 14:00
+     * without evidence, so keep asking through the late-morning hold until the band says awake;
+     * a fresh process at noon otherwise never learns it and waits for the hard end.
+     */
+    static boolean shouldPollSleepState(int hour, boolean nightTrackingEnabled, boolean wakeObserved) {
+        if (!nightTrackingEnabled) return false;
+        if (isNightWindow(hour)) return true;
+        return isSleepProtectionWindow(hour) && !wakeObserved;
+    }
+
+    private boolean shouldPollSleepStateNow() {
+        return shouldPollSleepState(sleepProtectionWindow, minuteOfDay(), nightTrackingEnabled(),
+                wakeEvidence.observed());
     }
 
     static boolean shouldPollSleepState(
             SleepProtectionSchedule.Window window, int minuteOfDay, boolean nightTrackingEnabled) {
-        return nightTrackingEnabled && SleepProtectionSchedule.inProtectionWindow(window, minuteOfDay);
+        return shouldPollSleepState(window, minuteOfDay, nightTrackingEnabled, false);
+    }
+
+    static boolean shouldPollSleepState(
+            SleepProtectionSchedule.Window window, int minuteOfDay, boolean nightTrackingEnabled,
+            boolean wakeObserved) {
+        if (!nightTrackingEnabled) return false;
+        // The core window always polls; the safety tail keeps asking until wake evidence appears.
+        return SleepProtectionSchedule.inCoreWindow(window, minuteOfDay)
+                || (!wakeObserved && SleepProtectionSchedule.inSafetyTail(window, minuteOfDay));
     }
 
     private boolean nightTrackingEnabled() {
@@ -1738,7 +1944,6 @@ public final class BandLiveService extends Service {
             resetQuietTracker();
             wakeEvidence.reset();
             wakeEvidenceCheckedAtMs = 0;
-            bandAsleep = null;
             awakeSamples = 0;
         }
     }
@@ -1839,6 +2044,7 @@ public final class BandLiveService extends Service {
                     "supervise stalled " + (beatAge / 1000) + "s, restarting");
             if (inScheduledProtectionWindow()) {
                 historySyncPending = false;
+                historyDeferredSinceMs = 0;
                 nextHealthAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(NIGHT_RESTART_COOLDOWN_MINUTES);
                 historyCooldownUntilMs = System.currentTimeMillis()
                         + TimeUnit.MINUTES.toMillis(NIGHT_RESTART_COOLDOWN_MINUTES);
@@ -1880,8 +2086,10 @@ public final class BandLiveService extends Service {
         }
         if (now >= nextSleepStateAt) {
             nextSleepStateAt = now + TimeUnit.MINUTES.toNanos(SLEEP_STATE_POLL_MINUTES);
-            if (inScheduledProtectionWindow() && nightTrackingEnabled()) {
-                requestSleepState();
+            // A nap holds pending history the same way a night does, so keep asking until awake.
+            if (shouldPollSleepStateNow()
+                    || (historySyncPending && Boolean.TRUE.equals(bandAsleep))) {
+                requestSleepState(true);
             }
         }
         if (waitingForInitialSleepState && now >= historyStateDeadlineAt) {
@@ -2289,9 +2497,42 @@ public final class BandLiveService extends Service {
         boolean quiet = sleepStateUnsupported && !waitingForInitialSleepState
                 && !cooldown && !evidence && nightQuietObserved();
         boolean stale = quietSignalStale && !evidence;
-        Boolean gatedSleepState = evidence ? Boolean.FALSE : bandAsleep;
+        Boolean gatedSleepState = evidence || napCapReached(inScheduledProtectionWindow(),
+                historyDeferredSinceMs, nowMs) ? Boolean.FALSE : bandAsleep;
         return shouldRequestHistory(night, sleepStateUnsupported, gatedSleepState,
                 waitingForInitialSleepState, quiet, cooldown, stale);
+    }
+
+    /**
+     * History pulls make the band close an open sleep file (firmware logs "Force wk-5"), at any
+     * hour, so a daytime nap is gated by the band's own state just like a night. Outside the
+     * night hold a band that keeps reporting asleep is trusted for {@link #DAY_ASLEEP_DEFER_HOURS}.
+     */
+    static boolean napCapReached(boolean suppressionWindow, long deferredSinceMs, long nowMs) {
+        return !suppressionWindow && deferredSinceMs > 0
+                && nowMs - deferredSinceMs >= TimeUnit.HOURS.toMillis(DAY_ASLEEP_DEFER_HOURS);
+    }
+
+    static boolean sleepStateFresh(long nowMs, long reportedAtMs) {
+        return reportedAtMs > 0 && nowMs >= reportedAtMs
+                && nowMs - reportedAtMs <= TimeUnit.MINUTES.toMillis(SLEEP_STATE_FRESH_MINUTES);
+    }
+
+    private boolean sleepStateFresh(long nowMs) {
+        return sleepStateFresh(nowMs, bandAsleepAtMs);
+    }
+
+    /** Asks the band before pulling history; the reply or the timeout resumes the pending pull. */
+    private boolean checkSleepStateBeforeHistory() {
+        if (sleepStateUnsupported || waitingForInitialSleepState || commands == null
+                || sleepStateFresh(System.currentTimeMillis())) {
+            return false;
+        }
+        waitingForInitialSleepState = true;
+        historyStateDeadlineAt = System.nanoTime()
+                + TimeUnit.SECONDS.toNanos(INITIAL_HISTORY_SYNC_WAIT_SECONDS);
+        requestSleepState(true);
+        return true;
     }
 
     private void requestHistoryWhenAwake(
@@ -2301,15 +2542,36 @@ public final class BandLiveService extends Service {
                 manualSyncRequestedAtMs, android.os.SystemClock.elapsedRealtime());
         if (manualRequested) pendingHistoryIncludesHistory = true;
         historySyncPending = true;
+        if (historyDeferredSinceMs == 0) historyDeferredSinceMs = System.currentTimeMillis();
+        if (!manualRequested && checkSleepStateBeforeHistory()) return;
         if (!manualRequested && !historyMayRun(nowMs, evidence)) {
             healthCollectionStatus("HISTORY_SYNC_QUEUED");
-            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
-                    "HISTORY_SYNC deferred asleep=" + bandAsleep
-                            + " waiting=" + waitingForInitialSleepState
-                            + " quiet=" + (sleepStateUnsupported && nightQuietObserved()));
+            String line = "HISTORY_SYNC deferred reason=" + historyDeferReason(nowMs, evidence)
+                    + " asleep=" + bandAsleep
+                    + " waiting=" + waitingForInitialSleepState
+                    + " quiet=" + (sleepStateUnsupported && nightQuietObserved());
+            // Health pulls and ticks repeat the same verdict many times a minute.
+            if (!line.equals(lastHistoryDeferLine)) {
+                lastHistoryDeferLine = line;
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, line);
+            }
             return;
         }
         flushPendingHistory(nowMs, evidence, activeProtection);
+    }
+
+    /** Mirrors {@link #historyMayRun(long, boolean)} so a deferred line names the gate that held it. */
+    private String historyDeferReason(long nowMs, boolean evidence) {
+        boolean core = inScheduledCoreWindow();
+        boolean protection = inScheduledProtectionWindow();
+        if (nightStillSuppressedNow(evidence)) {
+            return core ? "night" : "late-hold-no-wake-evidence";
+        }
+        if (waitingForInitialSleepState) return "waiting-sleep-state";
+        if (core && nowMs < historyCooldownUntilMs) return "cooldown";
+        if (!sleepStateUnsupported) return protection ? "band-asleep" : "band-asleep-nap";
+        if (quietSignalStale && !evidence) return "steps-stale";
+        return "quiet";
     }
 
     /**
@@ -2333,6 +2595,8 @@ public final class BandLiveService extends Service {
         boolean historical = pendingHistoryIncludesHistory
                 && (manualOverride || !activeProtection);
         historySyncPending = false;
+        historyDeferredSinceMs = 0;
+        lastHistoryDeferLine = null;
         pendingHistoryIncludesHistory = false;
         healthCollectionStatus("HISTORY_SYNCING");
         if (historical) publishSyncEvent(ACTION_SYNC_ROUND_STARTED, null,
@@ -2374,10 +2638,13 @@ public final class BandLiveService extends Service {
     }
 
     private void requestSleepState() {
+        requestSleepState(false);
+    }
+
+    private void requestSleepState(boolean beforeHistory) {
         var queue = commands;
         if (sleepStateUnsupported || stopRequested || queue == null
-                || !shouldPollSleepState(
-                        sleepProtectionWindow, minuteOfDay(), nightTrackingEnabled())) {
+                || !(beforeHistory || shouldPollSleepStateNow())) {
             return;
         }
         long epoch = sessionEpoch;
@@ -2400,6 +2667,7 @@ public final class BandLiveService extends Service {
         }
         boolean changed = !asleep.equals(bandAsleep);
         bandAsleep = asleep;
+        bandAsleepAtMs = System.currentTimeMillis();
         waitingForInitialSleepState = false;
         historyStateDeadlineAt = 0;
         if (changed && historySyncPending) {
@@ -2415,6 +2683,11 @@ public final class BandLiveService extends Service {
             awakeSamples = 0;
         } else {
             awakeSamples++;
+            if (historySyncPending && awakeSamples < AWAKE_CONFIRM_SAMPLES
+                    && !inScheduledCoreWindow() && inScheduledProtectionWindow()) {
+                nextSleepStateAt = Math.min(nextSleepStateAt,
+                        System.nanoTime() + TimeUnit.SECONDS.toNanos(LATE_AWAKE_CONFIRM_SECONDS));
+            }
             if (nightAwakeConfirmed(inScheduledProtectionWindow(), awakeSamples)) {
                 syncRequested = true;
                 nextHealthAt = System.nanoTime();
@@ -2732,6 +3005,7 @@ public final class BandLiveService extends Service {
         }
         try { getContentResolver().unregisterContentObserver(zenMode); } catch (RuntimeException ignored) { }
         requestStop();
+        cancelCoalescedNotifications(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
         calls.close();
         if (voiceAssistant != null) voiceAssistant.close();
         weatherSync.close();
