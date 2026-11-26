@@ -37,36 +37,48 @@ public final class AivsStreamParser {
         }
     }
 
-    private byte[] pending = new byte[0];
+    private String malformed = "";
 
     public List<Command> feed(byte[] chunk) {
         if (chunk == null || chunk.length == 0) return List.of();
-        byte[] merged = new byte[pending.length + chunk.length];
-        System.arraycopy(pending, 0, merged, 0, pending.length);
-        System.arraycopy(chunk, 0, merged, pending.length, chunk.length);
         List<Command> commands = new ArrayList<>();
         int offset = 0;
-        while (merged.length - offset >= HEADER_BYTES) {
-            int version = merged[offset] & 0xff;
-            int type = merged[offset + 1] & 0xff;
-            int length = ((merged[offset + 2] & 0xff) << 8) | (merged[offset + 3] & 0xff);
+        while (chunk.length - offset >= HEADER_BYTES) {
+            int version = chunk[offset] & 0xff;
+            int type = chunk[offset + 1] & 0xff;
+            int length = ((chunk[offset + 2] & 0xff) << 8) | (chunk[offset + 3] & 0xff);
             if (version != 0 || type < TYPE_START || type > TYPE_QUIT
                     || length > MAX_BODY_BYTES) {
-                // A malformed block cannot be resynchronised reliably inside an encrypted stream.
-                pending = new byte[0];
+                malformed = "version=" + version + " type=" + type + " length=" + length
+                        + " available=" + (chunk.length - offset);
                 return commands;
             }
-            if (merged.length - offset - HEADER_BYTES < length) break;
-            byte[] body = Arrays.copyOfRange(merged, offset + HEADER_BYTES,
+            if (chunk.length - offset - HEADER_BYTES < length) {
+                // The band emits whole AIVS blocks per SPP message. A short tail belongs to the
+                // closing session and must not be stitched onto the next session's START block.
+                malformed = "truncated version=" + version + " type=" + type
+                        + " length=" + length + " available=" + (chunk.length - offset);
+                return commands;
+            }
+            byte[] body = Arrays.copyOfRange(chunk, offset + HEADER_BYTES,
                     offset + HEADER_BYTES + length);
             commands.add(new Command(type, body));
             offset += HEADER_BYTES + length;
         }
-        pending = offset == 0 ? merged : Arrays.copyOfRange(merged, offset, merged.length);
+        if (offset < chunk.length) {
+            malformed = "tail bytes=" + (chunk.length - offset);
+        }
         return commands;
     }
 
     public void reset() {
-        pending = new byte[0];
+        malformed = "";
+    }
+
+    /** Returns and clears the last discarded block, for a single low-frequency diagnostic line. */
+    public String takeMalformed() {
+        String value = malformed;
+        malformed = "";
+        return value;
     }
 }

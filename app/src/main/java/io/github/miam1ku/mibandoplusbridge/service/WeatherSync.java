@@ -8,6 +8,8 @@ import io.github.miam1ku.mibandoplusbridge.integration.WeatherSnapshotProvider;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandWeatherEncoder;
 import io.github.miam1ku.mibandoplusbridge.protocol.LiveCommandQueue;
+import io.github.miam1ku.mibandoplusbridge.voice.WeatherConversationContext;
+import io.github.miam1ku.mibandoplusbridge.voice.WeatherQuestion;
 import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -94,6 +96,20 @@ public final class WeatherSync implements AutoCloseable {
         return submit(Operation.INSPECT, sample);
     }
     public CompletionStage<Void> send(BandWeatherEncoder.Sample sample) { return submit(Operation.SEND, sample); }
+
+    /**
+     * Read-only context for one voice weather turn. It never joins the weather transaction or
+     * changes what is queued for the band.
+     */
+    public String conversationContext(String question) {
+        if (!WeatherQuestion.asks(question)) return "";
+        try {
+            return WeatherConversationContext.format(freshSample(snapshot()));
+        } catch (Exception unavailable) {
+            SessionLog.line(context, "WEATHER_CHAT unavailable=" + code(unavailable));
+            return "";
+        }
+    }
 
     private CompletionStage<Void> submit(Operation requested, BandWeatherEncoder.Sample sample) {
         CompletableFuture<Void> result = new CompletableFuture<>();

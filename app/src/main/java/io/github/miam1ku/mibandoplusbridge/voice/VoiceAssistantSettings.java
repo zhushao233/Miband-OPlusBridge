@@ -32,6 +32,8 @@ public final class VoiceAssistantSettings {
     private static final String KEY_SYSTEM_PROMPT = "systemPrompt";
     private static final String KEY_CAPTURE_RAW = "captureRaw";
     private static final String KEY_API_KEY_CIPHERTEXT = "apiKeyCiphertext";
+    private static final String KEY_ASR_URL = "asrUrl";
+    private static final String KEY_ASR_API_KEY_CIPHERTEXT = "asrApiKeyCiphertext";
     private static final String KEYSTORE = "AndroidKeyStore";
     private static final String KEY_ALIAS = "miband_oplus_voice_api_key_v1";
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
@@ -42,73 +44,107 @@ public final class VoiceAssistantSettings {
 
     public record Values(VoiceAssistantPreset preset, boolean enabled, String baseUrl,
                          String transcriptionModel, String chatModel, String systemPrompt,
-                         String apiKey, boolean captureRaw) {
+                         String apiKey, boolean captureRaw, String asrUrl, String asrApiKey) {
         public boolean complete() {
             return enabled && !baseUrl.isBlank() && !chatModel.isBlank() && !apiKey.isBlank()
-                    && (!preset.usesTranscriptionModel() || !transcriptionModel.isBlank());
+                    && !asrUrl.isBlank() && !asrApiKey.isBlank()
+                    && validHttpsUrl(baseUrl) && validHttpsUrl(asrUrl);
         }
     }
 
     public static Values load(Context context) {
         SharedPreferences prefs = prefs(context);
         String baseUrl = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL);
+        VoiceAssistantPreset preset = VoiceAssistantPreset.fromSettings(
+                prefs.getString(KEY_PRESET, ""), baseUrl);
+        String chatKey = decrypt(prefs.getString(KEY_API_KEY_CIPHERTEXT, ""));
+        String asrKey = decrypt(prefs.getString(KEY_ASR_API_KEY_CIPHERTEXT, ""));
+        if (asrKey.isBlank()) asrKey = chatKey;
+        String asrUrl = prefs.getString(KEY_ASR_URL, "");
+        if (asrUrl.isBlank()) asrUrl = defaultAsrUrl(preset, baseUrl);
         return new Values(
-                VoiceAssistantPreset.fromSettings(prefs.getString(KEY_PRESET, ""), baseUrl),
+                preset,
                 prefs.getBoolean(KEY_ENABLED, false),
                 baseUrl,
-                prefs.getString(KEY_TRANSCRIPTION_MODEL, DEFAULT_TRANSCRIPTION_MODEL),
-                prefs.getString(KEY_CHAT_MODEL, DEFAULT_CHAT_MODEL),
+                prefs.getString(KEY_TRANSCRIPTION_MODEL, preset.transcriptionModel()),
+                prefs.getString(KEY_CHAT_MODEL, preset.chatModel().isBlank()
+                        ? DEFAULT_CHAT_MODEL : preset.chatModel()),
                 prefs.getString(KEY_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT),
-                decrypt(prefs.getString(KEY_API_KEY_CIPHERTEXT, "")),
-                prefs.getBoolean(KEY_CAPTURE_RAW, false));
+                chatKey,
+                prefs.getBoolean(KEY_CAPTURE_RAW, false),
+                asrUrl,
+                asrKey);
     }
 
     /**
-     * An empty API key keeps the existing encrypted value, so opening and saving the page does
-     * not require the user to enter it again.
+     * Empty API key fields keep the existing encrypted values, so opening and saving the page
+     * does not require the user to enter them again.
      */
     public static boolean save(Context context, String presetId, boolean enabled, String baseUrl,
                                String transcriptionModel, String chatModel, String systemPrompt,
-                               String replacementApiKey, boolean captureRaw) {
+                               String replacementApiKey, boolean captureRaw, String asrUrl,
+                               String replacementAsrApiKey) {
         VoiceAssistantPreset preset = VoiceAssistantPreset.fromId(presetId);
         String normalizedUrl = normalizeBaseUrl(baseUrl);
-        if (enabled && (!validHttpsUrl(normalizedUrl)
-                || (preset.usesTranscriptionModel()
-                        && (transcriptionModel == null || transcriptionModel.isBlank()))
-                || chatModel == null || chatModel.isBlank())) {
+        String normalizedAsrUrl = normalizeBaseUrl(asrUrl);
+        if (normalizedAsrUrl.isBlank()) normalizedAsrUrl = defaultAsrUrl(preset, normalizedUrl);
+        String normalizedChatModel = blankFallback(chatModel,
+                preset.chatModel().isBlank() ? DEFAULT_CHAT_MODEL : preset.chatModel());
+        if (enabled && (!validHttpsUrl(normalizedUrl) || !validHttpsUrl(normalizedAsrUrl)
+                || normalizedChatModel.isBlank())) {
             return false;
         }
         SharedPreferences prefs = prefs(context);
         String ciphertext = prefs.getString(KEY_API_KEY_CIPHERTEXT, "");
+        String previousChatKey = decrypt(ciphertext);
+        String effectiveChatKey = previousChatKey;
         if (replacementApiKey != null && !replacementApiKey.isBlank()) {
-            ciphertext = encrypt(replacementApiKey.trim());
+            effectiveChatKey = replacementApiKey.trim();
+            ciphertext = encrypt(effectiveChatKey);
             if (ciphertext.isEmpty()) return false;
         }
-        if (enabled && ciphertext.isEmpty()) return false;
+        String asrCiphertext = prefs.getString(KEY_ASR_API_KEY_CIPHERTEXT, "");
+        String effectiveAsrKey = decrypt(asrCiphertext);
+        if (effectiveAsrKey.isBlank()) effectiveAsrKey = previousChatKey;
+        if (effectiveAsrKey.isBlank()) effectiveAsrKey = effectiveChatKey;
+        if (replacementAsrApiKey != null && !replacementAsrApiKey.isBlank()) {
+            asrCiphertext = encrypt(replacementAsrApiKey.trim());
+            if (asrCiphertext.isEmpty()) return false;
+        } else if (asrCiphertext.isBlank() && !effectiveAsrKey.isBlank()) {
+            // Pin the fallback on first save so switching chat providers keeps the working ASR key.
+            asrCiphertext = encrypt(effectiveAsrKey);
+            if (asrCiphertext.isEmpty()) return false;
+        }
+        if (enabled && (ciphertext.isEmpty() || asrCiphertext.isEmpty())) return false;
         return prefs.edit()
                 .putBoolean(KEY_ENABLED, enabled)
                 .putString(KEY_PRESET, preset.id())
                 .putString(KEY_BASE_URL, normalizedUrl.isBlank() ? DEFAULT_BASE_URL : normalizedUrl)
                 .putString(KEY_TRANSCRIPTION_MODEL,
-                        preset.usesTranscriptionModel()
-                                ? blankFallback(transcriptionModel, DEFAULT_TRANSCRIPTION_MODEL)
-                                : "")
-                .putString(KEY_CHAT_MODEL, blankFallback(chatModel, DEFAULT_CHAT_MODEL))
+                        transcriptionModel == null ? "" : transcriptionModel.trim())
+                .putString(KEY_CHAT_MODEL, normalizedChatModel)
                 .putString(KEY_SYSTEM_PROMPT, blankFallback(systemPrompt, DEFAULT_SYSTEM_PROMPT))
                 .putString(KEY_API_KEY_CIPHERTEXT, ciphertext)
+                .putString(KEY_ASR_URL, normalizedAsrUrl)
+                .putString(KEY_ASR_API_KEY_CIPHERTEXT, asrCiphertext)
                 .putBoolean(KEY_CAPTURE_RAW, captureRaw)
                 .commit();
     }
 
-    public static boolean save(Context context, boolean enabled, String baseUrl,
-                               String transcriptionModel, String chatModel, String systemPrompt,
-                               String replacementApiKey, boolean captureRaw) {
-        return save(context, VoiceAssistantPreset.fromSettings("", baseUrl).id(), enabled,
-                baseUrl, transcriptionModel, chatModel, systemPrompt, replacementApiKey, captureRaw);
+    static String defaultAsrUrl(VoiceAssistantPreset preset, String baseUrl) {
+        if (preset == null || !preset.supportsTranscription()) return "";
+        return normalizeBaseUrl(baseUrl) + "/" + preset.transcriptionPath();
     }
 
     public static String maskedApiKey(Context context) {
-        String key = load(context).apiKey();
+        return mask(load(context).apiKey());
+    }
+
+    public static String maskedAsrApiKey(Context context) {
+        return mask(load(context).asrApiKey());
+    }
+
+    private static String mask(String key) {
         if (key.isBlank()) return "";
         String tail = key.length() <= 4 ? "" : key.substring(key.length() - 4);
         return "已保存 ••••" + tail;

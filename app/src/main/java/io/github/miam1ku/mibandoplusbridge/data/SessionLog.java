@@ -2,6 +2,7 @@
 package io.github.miam1ku.mibandoplusbridge.data;
 
 import android.content.Context;
+import io.github.miam1ku.mibandoplusbridge.BuildConfig;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -74,6 +75,12 @@ public final class SessionLog {
                 }
             } catch (IOException ignored) { }
         }
+    }
+
+    /** Frame-level diagnostics. Release builds keep only state changes and failures. */
+    public static void trace(Context context, String message) {
+        if (!BuildConfig.DEBUG) return;
+        line(context, message);
     }
 
     private static final String BUNDLE = "band-debug";

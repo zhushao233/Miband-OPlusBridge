@@ -25,6 +25,32 @@ public final class VoiceAssistantPresetTest {
         assertEquals("audio/transcriptions", preset.transcriptionPath());
         assertEquals("whisper-1", preset.transcriptionModel());
         assertTrue(preset.usesTranscriptionModel());
+        assertEquals("https://api.openai.com/v1/audio/transcriptions",
+                preset.transcriptionUrl());
+    }
+
+    @Test public void chatOnlyProvidersDoNotClaimASpeechEndpoint() {
+        assertEquals("https://api.moonshot.cn/v1", VoiceAssistantPreset.KIMI.baseUrl());
+        assertEquals("kimi-latest", VoiceAssistantPreset.KIMI.chatModel());
+        assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1",
+                VoiceAssistantPreset.QWEN.baseUrl());
+        assertEquals("qwen-plus", VoiceAssistantPreset.QWEN.chatModel());
+        assertEquals("https://openrouter.ai/api/v1",
+                VoiceAssistantPreset.OPENROUTER.baseUrl());
+        assertEquals("openai/gpt-4.1-mini", VoiceAssistantPreset.OPENROUTER.chatModel());
+
+        for (VoiceAssistantPreset preset : new VoiceAssistantPreset[]{
+                VoiceAssistantPreset.KIMI, VoiceAssistantPreset.QWEN,
+                VoiceAssistantPreset.OPENROUTER, VoiceAssistantPreset.OTHER}) {
+            assertFalse(preset.supportsTranscription());
+            assertEquals("", preset.transcriptionUrl());
+        }
+    }
+
+    @Test public void customPresetStartsWithEditableFields() {
+        assertSame(VoiceAssistantPreset.OTHER, VoiceAssistantPreset.fromId("custom"));
+        assertEquals("", VoiceAssistantPreset.OTHER.baseUrl());
+        assertEquals("", VoiceAssistantPreset.OTHER.chatModel());
     }
 
     @Test public void oldSettingsInferDeepSeekFromItsOfficialHost() {
@@ -32,6 +58,21 @@ public final class VoiceAssistantPresetTest {
                 VoiceAssistantPreset.fromSettings("", "https://api.deepseek.com/v1"));
         assertSame(VoiceAssistantPreset.OPENAI,
                 VoiceAssistantPreset.fromSettings("", "https://proxy.example/v1"));
+    }
+
+    @Test public void oldSettingsInferTheOtherOfficialHosts() {
+        assertSame(VoiceAssistantPreset.KIMI,
+                VoiceAssistantPreset.fromSettings("", "https://api.moonshot.cn/v1"));
+        assertSame(VoiceAssistantPreset.KIMI,
+                VoiceAssistantPreset.fromSettings("", "https://api.moonshot.ai/v1"));
+        assertSame(VoiceAssistantPreset.QWEN,
+                VoiceAssistantPreset.fromSettings("",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1"));
+        assertSame(VoiceAssistantPreset.QWEN,
+                VoiceAssistantPreset.fromSettings("",
+                        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"));
+        assertSame(VoiceAssistantPreset.OPENROUTER,
+                VoiceAssistantPreset.fromSettings("", "https://openrouter.ai/api/v1"));
     }
 
     @Test public void storedPresetTakesPriorityOverHostDetection() {

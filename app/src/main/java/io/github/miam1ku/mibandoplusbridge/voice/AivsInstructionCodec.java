@@ -20,6 +20,7 @@ public final class AivsInstructionCodec {
     public static final int CODE_STOP_CAPTURE = 3;
     public static final int CODE_DIALOG_FINISH = 4;
     public static final int CODE_TOAST = 256;
+    public static final int CODE_OPEN_APP = 266;
     public static final int CODE_TTS = 264;
 
     private AivsInstructionCodec() {}
@@ -37,14 +38,39 @@ public final class AivsInstructionCodec {
         return wrapper(List.of(s21.toByteArray()));
     }
 
-    /** Displays the answer and completes the dialog in one instruction packet. */
-    public static byte[] answer(int sessionId, String text) {
+    /** A plain answer toast. The official path sends this before DialogFinish. */
+    public static byte[] toast(int sessionId, String text) {
         byte[] n41 = stringMessage(1, text);
         ByteArrayOutputStream toast = new ByteArrayOutputStream();
         fieldVarint(toast, 1, CODE_TOAST);
         fieldMessage(toast, 3, n41);
         fieldVarint(toast, 13, sessionId);
-        return wrapper(List.of(toast.toByteArray(), finishInstruction(sessionId)));
+        return wrapper(List.of(toast.toByteArray()));
+    }
+
+    /**
+     * Opens a built-in watch app through the official Launcher.LaunchApp instruction. The band
+     * reads the package name and optional deep-link URI from s21 field 14.
+     */
+    public static byte[] openApp(int sessionId, String packageName, String uri) {
+        ByteArrayOutputStream intent = new ByteArrayOutputStream();
+        intent.writeBytes(stringMessage(1, packageName));
+        intent.writeBytes(stringMessage(2, uri == null ? "" : uri));
+        ByteArrayOutputStream launch = new ByteArrayOutputStream();
+        fieldMessage(launch, 1, intent.toByteArray());
+        ByteArrayOutputStream open = new ByteArrayOutputStream();
+        fieldVarint(open, 1, CODE_OPEN_APP);
+        fieldMessage(open, 14, launch.toByteArray());
+        fieldVarint(open, 13, sessionId);
+        return wrapper(List.of(open.toByteArray()));
+    }
+
+    /** Asks the band to stop recording after the local voice activity detector ends a turn. */
+    public static byte[] stopCapture(int sessionId) {
+        ByteArrayOutputStream s21 = new ByteArrayOutputStream();
+        fieldVarint(s21, 1, CODE_STOP_CAPTURE);
+        fieldVarint(s21, 13, sessionId);
+        return wrapper(List.of(s21.toByteArray()));
     }
 
     public static byte[] tts(int sessionId, String text) {

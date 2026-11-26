@@ -31,11 +31,16 @@ import java.util.function.Consumer;
  * the AIVS ASR/reply/finish instructions back through the same live session.</p>
  */
 public final class VoiceAssistantController implements AutoCloseable {
+    public interface WeatherContextProvider {
+        String weatherContext(String question);
+    }
+
     private static final int MAX_AUDIO_BYTES = 768 * 1024;
     private static final int MAX_OPUS_PACKETS = 1_600;
     private static final long END_SILENCE_MS = 2_500L;
     private static final long MAX_CAPTURE_MS = 30_000L;
     private static final long PARTIAL_INTERVAL_MS = 1_200L;
+    private static final long DIALOG_FINISH_DELAY_MS = 120L;
     private static final int PARTIAL_WINDOW_PACKETS = 500;
     private static final int MIN_PARTIAL_PACKETS = 10;
     private static final int OPUS_PACKET_BYTES = 80;
@@ -44,10 +49,13 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private final Context context;
     private final VoiceReplySink replySink;
+    private final WatchCommandExecutor commandExecutor;
+    private final WeatherContextProvider weatherContextProvider;
     private final Consumer<String> onTranscript;
     private final Consumer<OpenAiVoiceClient.Answer> onAnswer;
     private final Consumer<String> onFailure;
     private final OpenAiVoiceClient client = new OpenAiVoiceClient();
+    private final VoiceConversationHistory history;
     private final AivsStreamParser parser = new AivsStreamParser();
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(
             runnable -> {
@@ -82,17 +90,23 @@ public final class VoiceAssistantController implements AutoCloseable {
     private boolean finalizing;
     private boolean partialInFlight;
     private boolean speechSeen;
+    private int audioCommands;
     private boolean closed;
 
     public VoiceAssistantController(Context context, VoiceReplySink replySink,
+                                    WatchCommandExecutor commandExecutor,
+                                    WeatherContextProvider weatherContextProvider,
                                     Consumer<String> onTranscript,
                                     Consumer<OpenAiVoiceClient.Answer> onAnswer,
                                     Consumer<String> onFailure) {
         this.context = context.getApplicationContext();
         this.replySink = replySink;
+        this.commandExecutor = commandExecutor;
+        this.weatherContextProvider = weatherContextProvider;
         this.onTranscript = onTranscript;
         this.onAnswer = onAnswer;
         this.onFailure = onFailure;
+        this.history = new VoiceConversationHistory(this.context);
         this.voiceActivity = new OpusVoiceActivityDetector(this.context,
                 this::voiceActivityStarted, this::voiceActivityEnded, ignored -> { });
     }
@@ -121,7 +135,12 @@ public final class VoiceAssistantController implements AutoCloseable {
             SessionLog.line(context, "VOICE_FRAME " + group + " bytes=" + payload.length
                     + " frx=" + frx);
         }
-        for (AivsStreamParser.Command command : parser.feed(payload)) {
+        List<AivsStreamParser.Command> commands = parser.feed(payload);
+        String malformed = parser.takeMalformed();
+        if (!malformed.isEmpty()) {
+            SessionLog.line(context, "VOICE_PARSE reset " + malformed);
+        }
+        for (AivsStreamParser.Command command : commands) {
             handle(command);
         }
     }
@@ -141,6 +160,8 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private void handle(AivsStreamParser.Command command) {
         if (command.type() == AivsStreamParser.TYPE_START) {
+            SessionLog.line(context, "VOICE_CMD type=start bytes=" + command.data().length
+                    + " sid=" + command.sessionId() + " tts=" + command.ttsEnabled());
             VoiceAssistantSettings.Values loaded = VoiceAssistantSettings.load(context);
             if (!loaded.complete()) {
                 SessionLog.line(context, "VOICE_SETTINGS waiting-for-config");
@@ -155,9 +176,26 @@ public final class VoiceAssistantController implements AutoCloseable {
         }
         if (settings == null || !settings.complete()) return;
         switch (command.type()) {
-            case AivsStreamParser.TYPE_AUDIO -> appendAudio(command.data(), settings);
-            case AivsStreamParser.TYPE_END -> finishCapture("band-end", settings);
-            case AivsStreamParser.TYPE_QUIT -> abort("band-quit");
+            case AivsStreamParser.TYPE_AUDIO -> {
+                synchronized (this) {
+                    if (audioCommands == 0) {
+                        SessionLog.line(context, "VOICE_CMD type=audio bytes="
+                                + command.data().length + " gen=" + generation);
+                    }
+                    audioCommands++;
+                }
+                appendAudio(command.data(), settings);
+            }
+            case AivsStreamParser.TYPE_END -> {
+                SessionLog.line(context, "VOICE_CMD type=end bytes=" + command.data().length
+                        + " gen=" + generation);
+                finishCapture("band-end", settings);
+            }
+            case AivsStreamParser.TYPE_QUIT -> {
+                SessionLog.line(context, "VOICE_CMD type=quit bytes=" + command.data().length
+                        + " gen=" + generation);
+                abort("band-quit");
+            }
             default -> { }
         }
     }
@@ -173,6 +211,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         sessionActive = true;
         finalizing = false;
         speechSeen = false;
+        audioCommands = 0;
         captureStartedAt = System.currentTimeMillis();
         lastAudioAt = captureStartedAt;
         lastPartialAt = captureStartedAt;
@@ -319,6 +358,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         boolean tts;
         long currentGeneration;
         int chunkCount;
+        int commandCount;
         String probe;
         boolean heard;
         synchronized (this) {
@@ -334,6 +374,7 @@ public final class VoiceAssistantController implements AutoCloseable {
             }
             opus = clonePackets(opusPackets, 0);
             chunkCount = packets;
+            commandCount = audioCommands;
             probe = firstChunkProbe;
             heard = speechSeen;
             stream = captured.toByteArray();
@@ -342,6 +383,9 @@ public final class VoiceAssistantController implements AutoCloseable {
             sessionActive = false;
             resetCaptureLocked();
             voiceActivity.reset();
+        }
+        if (!"band-end".equals(reason)) {
+            send(sid, AivsInstructionCodec.stopCapture(sid));
         }
         logFrameDiagnostics("finish", stream.length, chunkCount, opus, probe);
         if (settings.captureRaw()) saveDebugSample(stream, "finish");
@@ -367,6 +411,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         }
         SessionLog.line(context, "VOICE_CAPTURE end=" + reason + " chunks=" + chunkCount
                 + " opusPackets=" + opus.size() + " ogg=" + ogg.length
+                + " audioCommands=" + commandCount
                 + " probe=" + probe + " speechSeen=" + heard
                 + " gen=" + currentGeneration);
         apiWorker.execute(() -> finalizeSession(settings, ogg, sid, tts, currentGeneration));
@@ -397,9 +442,83 @@ public final class VoiceAssistantController implements AutoCloseable {
                 SessionLog.line(context, "VOICE_ASR send-failed");
             }
             onTranscript.accept(transcript);
+            String localTimeReply = LocalTimeQuestion.answer(transcript);
+            if (localTimeReply != null) {
+                if (!isCurrent(currentGeneration)) return;
+                String compact = VoiceText.compact(localTimeReply, 300);
+                SessionLog.line(context, "VOICE_LOCAL_TIME replyChars=" + compact.length());
+                if (!sendReply(sid, compact, tts)) {
+                    SessionLog.line(context, "VOICE_LOCAL_TIME send-failed");
+                }
+                publishAnswer(transcript, compact, VoiceConversationHistory.Kind.LOCAL);
+                return;
+            }
+            WatchCommand command = WatchCommandParser.parse(transcript,
+                    java.time.LocalTime.now());
+            if (command != null) {
+                if (command.kind() == WatchCommand.Kind.OPEN_WATCH_APP) {
+                    WatchCommand.WatchApp app = command.app();
+                    boolean sent = app != null && send(sid,
+                            AivsInstructionCodec.openApp(sid, app.packageName(), app.uri()));
+                    SessionLog.line(context, "VOICE_WATCH app="
+                            + (app == null ? "none" : app.name())
+                            + " pkg=" + (app == null ? "" : app.packageName())
+                            + " sent=" + sent);
+                    if (sent) {
+                        try {
+                            Thread.sleep(DIALOG_FINISH_DELAY_MS);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                        send(sid, AivsInstructionCodec.finish(sid));
+                    }
+                    if (!isCurrent(currentGeneration)) return;
+                    String reply = app == null
+                            ? "没有识别到要打开的手环应用。"
+                            : sent ? "正在打开" + app.label() + "。"
+                            : "手环连接已断开，未能打开" + app.label() + "。";
+                    publishAnswer(transcript, reply, VoiceConversationHistory.Kind.WATCH);
+                    return;
+                }
+                String reply;
+                try {
+                    SessionLog.line(context, "VOICE_WATCH command=" + command.kind());
+                    reply = commandExecutor == null ? "" : commandExecutor.execute(command);
+                } catch (Exception failed) {
+                    String code = failed.getMessage();
+                    if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
+                        code = failed.getClass().getSimpleName();
+                    }
+                    SessionLog.line(context, "VOICE_WATCH failed " + code);
+                    reply = "手环指令发送中断，请确认手环已连接后再试一次。";
+                }
+                if (!isCurrent(currentGeneration)) return;
+                String compact = VoiceText.compact(reply, 300);
+                if (!compact.isBlank()) sendReply(sid, compact, tts);
+                publishAnswer(transcript, compact, VoiceConversationHistory.Kind.WATCH);
+                return;
+            }
             String reply;
+            VoiceConversationHistory.Kind kind = VoiceConversationHistory.Kind.MODEL;
             try {
-                reply = client.chat(settings, transcript).trim();
+                if (WeatherQuestion.asks(transcript)) {
+                    kind = VoiceConversationHistory.Kind.WEATHER;
+                    String weather = "";
+                    try {
+                        if (weatherContextProvider != null) {
+                            weather = weatherContextProvider.weatherContext(transcript);
+                        }
+                    } catch (Exception unavailable) {
+                        SessionLog.line(context, "VOICE_WEATHER unavailable");
+                    }
+                    if (weather == null || weather.isBlank()) {
+                        weather = "本轮实时天气快照为空。"
+                                + "请告诉用户当前暂无实时天气数据，并只回答已有信息。";
+                    }
+                    reply = client.chat(settings, transcript, weather).trim();
+                } else {
+                    reply = client.chat(settings, transcript).trim();
+                }
             } catch (Exception failed) {
                 String code = failed.getMessage();
                 if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
@@ -422,7 +541,7 @@ public final class VoiceAssistantController implements AutoCloseable {
             if (!sendReply(sid, compact, tts)) {
                 SessionLog.line(context, "VOICE_ANSWER send-failed");
             }
-            onAnswer.accept(new OpenAiVoiceClient.Answer(transcript, compact));
+            publishAnswer(transcript, compact, kind);
         } catch (Exception failure) {
             String code = failure.getMessage();
             if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
@@ -436,6 +555,17 @@ public final class VoiceAssistantController implements AutoCloseable {
         } finally {
             Arrays.fill(ogg, (byte) 0);
         }
+    }
+
+    private void publishAnswer(String transcript, String reply,
+                               VoiceConversationHistory.Kind kind) {
+        try {
+            history.append(new VoiceConversationHistory.Entry(
+                    System.currentTimeMillis(), transcript, reply, kind));
+        } catch (RuntimeException invalid) {
+            SessionLog.line(context, "VOICE_HISTORY write-failed");
+        }
+        onAnswer.accept(new OpenAiVoiceClient.Answer(transcript, reply, kind.name()));
     }
 
     private boolean send(int sid, byte[] instruction) {
@@ -456,7 +586,16 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private boolean sendReply(int sid, String text, boolean tts) {
         if (tts) send(sid, AivsInstructionCodec.tts(sid, text));
-        return send(sid, AivsInstructionCodec.answer(sid, text));
+        if (!send(sid, AivsInstructionCodec.toast(sid, text))) return false;
+        if (!tts) {
+            // The official app sends Toast and DialogFinish as two separate SPP messages.
+            try {
+                Thread.sleep(DIALOG_FINISH_DELAY_MS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        return send(sid, AivsInstructionCodec.finish(sid));
     }
 
     private synchronized void abort(String reason) {
@@ -476,6 +615,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         wipe(opusPackets);
         opusPackets.clear();
         packets = 0;
+        audioCommands = 0;
         captureStartedAt = 0;
         lastAudioAt = 0;
         firstChunkProbe = "";

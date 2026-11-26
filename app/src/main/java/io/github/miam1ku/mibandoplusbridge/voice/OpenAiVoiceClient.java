@@ -18,7 +18,11 @@ public final class OpenAiVoiceClient {
     private static final int READ_TIMEOUT_MS = 60_000;
     private static final int MAX_RESPONSE_BYTES = 128 * 1024;
 
-    public record Answer(String transcript, String reply) {}
+    public record Answer(String transcript, String reply, String kind) {
+        public Answer(String transcript, String reply) {
+            this(transcript, reply, "MODEL");
+        }
+    }
 
     public Answer ask(VoiceAssistantSettings.Values settings, byte[] oggOpus) throws Exception {
         return ask(settings, oggOpus, ignored -> { });
@@ -38,7 +42,7 @@ public final class OpenAiVoiceClient {
             throws Exception {
         String boundary = "----MibandOPlusBridge" + UUID.randomUUID().toString().replace("-", "");
         ByteArrayOutputStream multipart = new ByteArrayOutputStream(audio.length + 2048);
-        if (settings.preset().usesTranscriptionModel()) {
+        if (!settings.transcriptionModel().isBlank()) {
             field(multipart, boundary, "model", settings.transcriptionModel());
             field(multipart, boundary, "language", "zh");
             field(multipart, boundary, "response_format", "json");
@@ -52,10 +56,9 @@ public final class OpenAiVoiceClient {
 
         JSONObject response;
         try {
-            response = requestJson(endpoint(settings.baseUrl(),
-                            settings.preset().transcriptionPath()),
+            response = requestJson(settings.asrUrl(),
                     "POST", "multipart/form-data; boundary=" + boundary,
-                    multipart.toByteArray(), settings.apiKey());
+                    multipart.toByteArray(), settings.asrApiKey());
         } catch (IllegalStateException failure) {
             throw stage(failure, "VOICE_ASR_");
         }
@@ -66,10 +69,16 @@ public final class OpenAiVoiceClient {
 
     public String chat(VoiceAssistantSettings.Values settings, String prompt)
             throws Exception {
-        JSONArray messages = new JSONArray();
-        messages.put(new JSONObject().put("role", "system")
-                .put("content", settings.systemPrompt()));
-        messages.put(new JSONObject().put("role", "user").put("content", prompt));
+        return chat(settings, prompt, "");
+    }
+
+    /**
+     * Extra context is a second system message immediately before the user turn. The original
+     * system prompt and ordinary two-message layout stay byte-for-byte unchanged.
+     */
+    public String chat(VoiceAssistantSettings.Values settings, String prompt,
+                       String extraSystemContext) throws Exception {
+        JSONArray messages = chatMessages(settings, prompt, extraSystemContext);
         JSONObject request = new JSONObject()
                 .put("model", settings.chatModel())
                 .put("messages", messages)
@@ -91,6 +100,19 @@ public final class OpenAiVoiceClient {
         String content = message == null ? "" : message.optString("content", "");
         if (content.isBlank()) throw new IllegalStateException("VOICE_CHAT_EMPTY");
         return content;
+    }
+
+    static JSONArray chatMessages(VoiceAssistantSettings.Values settings, String prompt,
+                                  String extraSystemContext) throws Exception {
+        JSONArray messages = new JSONArray();
+        messages.put(new JSONObject().put("role", "system")
+                .put("content", settings.systemPrompt()));
+        if (extraSystemContext != null && !extraSystemContext.isBlank()) {
+            messages.put(new JSONObject().put("role", "system")
+                    .put("content", extraSystemContext.trim()));
+        }
+        messages.put(new JSONObject().put("role", "user").put("content", prompt));
+        return messages;
     }
 
     private static JSONObject requestJson(String endpoint, String method, String contentType,
