@@ -30,4 +30,15 @@ public final class VoiceAssistantSettingsTest {
         assertEquals("", VoiceAssistantSettings.defaultAsrUrl(
                 VoiceAssistantPreset.OPENROUTER, "https://openrouter.ai/api/v1"));
     }
+
+    @Test public void anEmptyStoredModelFallsBackToThePresetDefault() {
+        assertEquals("whisper-1", VoiceAssistantSettings.effectiveTranscriptionModel(
+                "", VoiceAssistantPreset.OPENAI));
+        assertEquals("whisper-1", VoiceAssistantSettings.effectiveTranscriptionModel(
+                "   ", VoiceAssistantPreset.OPENAI));
+        assertEquals("custom-asr", VoiceAssistantSettings.effectiveTranscriptionModel(
+                " custom-asr ", VoiceAssistantPreset.OPENAI));
+        assertEquals("", VoiceAssistantSettings.effectiveTranscriptionModel(
+                "", VoiceAssistantPreset.KIMI));
+    }
 }

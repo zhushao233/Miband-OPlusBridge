@@ -46,7 +46,11 @@ public final class VoiceAssistantSettings {
                          String transcriptionModel, String chatModel, String systemPrompt,
                          String apiKey, boolean captureRaw, String asrUrl, String asrApiKey) {
         public boolean complete() {
-            return enabled && !baseUrl.isBlank() && !chatModel.isBlank() && !apiKey.isBlank()
+            return enabled && configured();
+        }
+
+        public boolean configured() {
+            return !baseUrl.isBlank() && !chatModel.isBlank() && !apiKey.isBlank()
                     && !asrUrl.isBlank() && !asrApiKey.isBlank()
                     && validHttpsUrl(baseUrl) && validHttpsUrl(asrUrl);
         }
@@ -62,11 +66,13 @@ public final class VoiceAssistantSettings {
         if (asrKey.isBlank()) asrKey = chatKey;
         String asrUrl = prefs.getString(KEY_ASR_URL, "");
         if (asrUrl.isBlank()) asrUrl = defaultAsrUrl(preset, baseUrl);
+        String transcriptionModel = effectiveTranscriptionModel(
+                prefs.getString(KEY_TRANSCRIPTION_MODEL, ""), preset);
         return new Values(
                 preset,
                 prefs.getBoolean(KEY_ENABLED, false),
                 baseUrl,
-                prefs.getString(KEY_TRANSCRIPTION_MODEL, preset.transcriptionModel()),
+                transcriptionModel,
                 prefs.getString(KEY_CHAT_MODEL, preset.chatModel().isBlank()
                         ? DEFAULT_CHAT_MODEL : preset.chatModel()),
                 prefs.getString(KEY_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT),
@@ -116,24 +122,33 @@ public final class VoiceAssistantSettings {
             if (asrCiphertext.isEmpty()) return false;
         }
         if (enabled && (ciphertext.isEmpty() || asrCiphertext.isEmpty())) return false;
-        return prefs.edit()
+        SharedPreferences.Editor editor = prefs.edit()
                 .putBoolean(KEY_ENABLED, enabled)
                 .putString(KEY_PRESET, preset.id())
                 .putString(KEY_BASE_URL, normalizedUrl.isBlank() ? DEFAULT_BASE_URL : normalizedUrl)
-                .putString(KEY_TRANSCRIPTION_MODEL,
-                        transcriptionModel == null ? "" : transcriptionModel.trim())
                 .putString(KEY_CHAT_MODEL, normalizedChatModel)
                 .putString(KEY_SYSTEM_PROMPT, blankFallback(systemPrompt, DEFAULT_SYSTEM_PROMPT))
                 .putString(KEY_API_KEY_CIPHERTEXT, ciphertext)
                 .putString(KEY_ASR_URL, normalizedAsrUrl)
                 .putString(KEY_ASR_API_KEY_CIPHERTEXT, asrCiphertext)
-                .putBoolean(KEY_CAPTURE_RAW, captureRaw)
-                .commit();
+                .putBoolean(KEY_CAPTURE_RAW, captureRaw);
+        String normalizedTranscription = transcriptionModel == null ? "" : transcriptionModel.trim();
+        if (normalizedTranscription.isEmpty()) {
+            editor.remove(KEY_TRANSCRIPTION_MODEL);
+        } else {
+            editor.putString(KEY_TRANSCRIPTION_MODEL, normalizedTranscription);
+        }
+        return editor.commit();
     }
 
     static String defaultAsrUrl(VoiceAssistantPreset preset, String baseUrl) {
         if (preset == null || !preset.supportsTranscription()) return "";
         return normalizeBaseUrl(baseUrl) + "/" + preset.transcriptionPath();
+    }
+
+    static String effectiveTranscriptionModel(String stored, VoiceAssistantPreset preset) {
+        if (stored != null && !stored.isBlank()) return stored.trim();
+        return preset == null ? "" : preset.transcriptionModel();
     }
 
     public static String maskedApiKey(Context context) {

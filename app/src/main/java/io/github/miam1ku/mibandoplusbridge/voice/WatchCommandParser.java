@@ -56,7 +56,7 @@ public final class WatchCommandParser {
         if (text.isBlank()) return null;
 
         if (containsAny(text, "找手机", "查找手机", "查找我的手机", "找我的手机",
-                "找一下手机", "手机在哪", "手机在哪里", "手机找不到")) {
+                "找一下手机", "手机在哪", "手机在哪里")) {
             return WatchCommand.of(WatchCommand.Kind.FIND_PHONE);
         }
         if (containsAny(text, "暂停音乐", "暂停播放", "停止播放", "把音乐暂停")) {

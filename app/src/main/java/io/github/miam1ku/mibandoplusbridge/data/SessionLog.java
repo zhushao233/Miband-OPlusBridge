@@ -27,6 +27,7 @@ public final class SessionLog {
     private static final long MAX_BYTES = 256 * 1024;
     private static final Object LOCK = new Object();
     private static boolean started;
+    private static volatile boolean frameTraceEnabled;
 
     private SessionLog() {}
 
@@ -77,9 +78,14 @@ public final class SessionLog {
         }
     }
 
-    /** Frame-level diagnostics. Release builds keep only state changes and failures. */
+    /** Enables frame-level diagnostics in release builds when raw voice capture is requested. */
+    public static void setFrameTraceEnabled(boolean enabled) {
+        frameTraceEnabled = enabled;
+    }
+
+    /** Frame-level diagnostics. Debug builds and the explicit capture switch keep them. */
     public static void trace(Context context, String message) {
-        if (!BuildConfig.DEBUG) return;
+        if (!BuildConfig.DEBUG && !frameTraceEnabled) return;
         line(context, message);
     }
 

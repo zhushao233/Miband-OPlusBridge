@@ -691,7 +691,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                     continue;
                 }
                 if (frame.type() == SppV2Codec.TYPE_NAK) {
-                    SessionLog.line(context, "rx spp2 nak seq=" + frame.sequence());
+                    SessionLog.trace(context, "rx spp2 nak seq=" + frame.sequence());
                     continue;
                 }
                 return decodeAndAck(frame);
@@ -852,7 +852,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 return;
             }
             heldActivity.add(Arrays.copyOf(payload, payload.length));
-            SessionLog.line(context, "rx activity held len=" + payload.length);
+            SessionLog.trace(context, "rx activity held len=" + payload.length);
             return;
         }
         BandHistoryParser.FileResult result;
@@ -931,15 +931,15 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 if (!commandFitsPayloadLimit(framing, cipher.length, peerPayloadLimit)) {
                     throw new Failure("AIVS_EXCEEDS_NEGOTIATED_SIZE");
                 }
-                SessionLog.line(context, "tx aivs seq=" + sequence + " plain=" + plainLength
+                SessionLog.trace(context, "tx aivs seq=" + sequence + " plain=" + plainLength
                         + " wire=" + cipher.length);
                 sendFrame(SppV2Codec.dataFrame(sequence, SppV2Codec.CHANNEL_PROTOBUF,
                         SppV2Codec.OPCODE_ENCRYPTED, cipher));
                 // AIVS business type 101 is fire-and-forget on the official path. A completed
-                // encrypted SPP write is the end of the instruction; a later transport ACK
-                // is ignored once the sequence has been retired.
+                // encrypted SPP write is the end of the instruction; the queue keeps the raw
+                // sequence retired so its late transport ACK cannot confirm a later command.
                 LiveCommandQueue queue = liveCommands;
-                if (queue != null) queue.onAck(sequence);
+                if (queue != null) queue.onRawWritten(sequence);
             } finally {
                 OwnershipController.endNativeSession();
             }
@@ -987,7 +987,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 if (!commandFitsPayloadLimit(framing, bytes.length, peerPayloadLimit)) {
                     throw new Failure("COMMAND_EXCEEDS_NEGOTIATED_SIZE");
                 }
-                SessionLog.line(context, "tx ble type=" + command.getType() + " subtype=" + command.getSubtype()
+                SessionLog.trace(context, "tx ble type=" + command.getType() + " subtype=" + command.getSubtype()
                         + " auth=" + authenticated + " counter=" + counter
                         + " plain=" + plainLength + " cipher=" + bytes.length);
                 ble.write(bytes, authenticated, counter);
@@ -1006,7 +1006,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 if (!commandFitsPayloadLimit(framing, bytes.length, peerPayloadLimit)) {
                     throw new Failure("COMMAND_EXCEEDS_NEGOTIATED_SIZE");
                 }
-                SessionLog.line(context, "tx spp1 type=" + command.getType() + " subtype=" + command.getSubtype()
+                SessionLog.trace(context, "tx spp1 type=" + command.getType() + " subtype=" + command.getSubtype()
                         + " dataType=" + dataType + " counter=" + counter
                         + " plain=" + plainLength + " wire=" + bytes.length);
                 synchronized (writeLock) {
@@ -1019,7 +1019,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
             if (!commandFitsPayloadLimit(framing, bytes.length, peerPayloadLimit)) {
                 throw new Failure("COMMAND_EXCEEDS_NEGOTIATED_SIZE");
             }
-            SessionLog.line(context, "tx spp2 type=" + command.getType() + " subtype=" + command.getSubtype()
+            SessionLog.trace(context, "tx spp2 type=" + command.getType() + " subtype=" + command.getSubtype()
                     + " auth=" + authenticated + " plain=" + plainLength + " wire=" + bytes.length);
             synchronized (writeLock) {
                 sendFrame(SppV2Codec.dataFrame(sequence, SppV2Codec.CHANNEL_PROTOBUF,
@@ -1042,13 +1042,13 @@ public final class SppDiagnosticClient implements AutoCloseable {
                     counter = takeV1Counter();
                     body = session.encryptV1(chunk, counter);
                 }
-                SessionLog.line(context, "tx ble icon part bytes=" + chunk.length + " counter=" + counter);
+                SessionLog.trace(context, "tx ble icon part bytes=" + chunk.length + " counter=" + counter);
                 ble.writeUpload(body, authenticated, counter);
                 return;
             }
             if (chunk.length + 2 > peerPayloadLimit) throw new Failure("ICON_CHUNK");
             if (framing == 1) {
-                SessionLog.line(context, "tx spp1 icon part bytes=" + chunk.length);
+                SessionLog.trace(context, "tx spp1 icon part bytes=" + chunk.length);
                 synchronized (writeLock) {
                     output.write(SppV1Codec.encode(new SppV1Codec.Packet(
                             SppV1Codec.CHANNEL_MASS, true, false, SppV1Codec.OPCODE_SEND,
@@ -1057,7 +1057,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 }
                 return;
             }
-            SessionLog.line(context, "tx spp2 icon part bytes=" + chunk.length);
+            SessionLog.trace(context, "tx spp2 icon part bytes=" + chunk.length);
             sendFrame(SppV2Codec.dataFrame(sequence, SppV2Codec.CHANNEL_DATA,
                     SppV2Codec.OPCODE_PLAINTEXT, chunk));
         } finally {
@@ -1135,18 +1135,18 @@ public final class SppDiagnosticClient implements AutoCloseable {
             return null;
         }
         if (decision == SppV2Codec.ReceiveCursor.Decision.DROP) {
-            SessionLog.line(context, "rx spp2 seq=" + sequence + " expected=" + expected
+            SessionLog.trace(context, "rx spp2 seq=" + sequence + " expected=" + expected
                     + " channel=" + channel + " action=drop");
             return null;
         }
         if (decision == SppV2Codec.ReceiveCursor.Decision.NAK) {
-            SessionLog.line(context, "rx spp2 seq=" + sequence + " expected=" + expected
+            SessionLog.trace(context, "rx spp2 seq=" + sequence + " expected=" + expected
                     + " channel=" + channel + " action=nak");
             sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_NAK, expected, new byte[0]));
             return null;
         }
         if (sequence != expected) {
-            SessionLog.line(context, "rx spp2 seq=" + sequence + " expected=" + expected
+            SessionLog.trace(context, "rx spp2 seq=" + sequence + " expected=" + expected
                     + " channel=" + channel + " frx=" + frame.frx() + " action=resync");
         }
         var data = SppV2Codec.parseData(frame);
@@ -1206,10 +1206,10 @@ public final class SppDiagnosticClient implements AutoCloseable {
         try {
             command = XiaomiProto.Command.parseFrom(plaintext);
         } catch (com.google.protobuf.InvalidProtocolBufferException notACommand) {
-            // Voice audio may share the protobuf channel without using a protobuf packet body.
-            // Preserve the session and pass the decrypted candidate to the voice observer.
-            observeUnknownPayload(sequence, frame.frx(), data.flags(), data.channel(),
-                    data.opcode(), plaintext);
+            // AIVS is routed by its explicit voice channel, never by whether a payload happens
+            // to parse as XiaomiProto.Command. Keep the session alive and record the mismatch.
+            SessionLog.line(context, "VOICE_UNSUPPORTED channel=1 protobuf=true seq=" + sequence);
+            sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_ACK, sequence, new byte[0]));
             Arrays.fill(plaintext, (byte) 0);
             return null;
         }
@@ -1269,7 +1269,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private void acceptActivity(SppV2Codec.Data data, int sequence, byte[] rawPayload) throws Exception {
         BandHistoryParser.FileResult result = null;
         if (history == null) {
-            SessionLog.line(context, "rx spp2 activity before history seq=" + sequence);
+            SessionLog.trace(context, "rx spp2 activity before history seq=" + sequence);
         } else if (data.opcode() != SppV2Codec.OPCODE_ENCRYPTED) {
             throw new Failure("UNSUPPORTED_DATA_CHANNEL");
         } else {
@@ -1437,7 +1437,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 continue;
             }
             if (frame.type() == SppV2Codec.TYPE_NAK) {
-                SessionLog.line(context, "rx spp2 nak seq=" + frame.sequence());
+                SessionLog.trace(context, "rx spp2 nak seq=" + frame.sequence());
                 continue;
             }
             XiaomiProto.Command command = decodeAndAck(frame);
@@ -1456,7 +1456,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
                     if (frame.type() == SppV2Codec.TYPE_ACK) {
                         liveCommands.onAck(frame.sequence());
                     } else if (frame.type() == SppV2Codec.TYPE_NAK) {
-                        SessionLog.line(context, "rx spp2 nak seq=" + frame.sequence());
+                        SessionLog.trace(context, "rx spp2 nak seq=" + frame.sequence());
                     } else {
                         XiaomiProto.Command command = decodeAndAck(frame);
                         if (command != null) {

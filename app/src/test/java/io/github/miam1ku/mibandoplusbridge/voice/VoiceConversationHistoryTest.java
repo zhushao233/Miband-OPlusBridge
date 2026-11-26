@@ -66,4 +66,18 @@ public final class VoiceConversationHistoryTest {
             directory.delete();
         }
     }
+
+    @Test public void textLimitKeepsSurrogatePairsIntact() {
+        String butterfly = "🦋";
+        String user = butterfly.repeat(2_001);
+        String reply = butterfly.repeat(4_001);
+
+        var entry = new VoiceConversationHistory.Entry(
+                200, user, reply, VoiceConversationHistory.Kind.MODEL);
+
+        assertTrue(entry.user().codePointCount(0, entry.user().length()) == 2_000);
+        assertTrue(entry.reply().codePointCount(0, entry.reply().length()) == 4_000);
+        assertEquals(butterfly, entry.user().substring(entry.user().length() - 2));
+        assertEquals(butterfly, entry.reply().substring(entry.reply().length() - 2));
+    }
 }

@@ -15,8 +15,8 @@ import java.util.List;
  * is 16 kHz.</p>
  */
 public final class VoiceOpusFrames {
-    private static final int VOICE_BLOCK_HEADER_BYTES = 4;
-    private static final int VOICE_OPUS_PACKET_BYTES = 80;
+    /** One 20 ms Opus packet in the band's AIVS audio body. */
+    public static final int VOICE_OPUS_PACKET_BYTES = 80;
     private static final int OPUS_TIMELINE_RATE = 48_000;
     private static final int FRAME_MILLIS = 20;
     private static final int FRAME_GRANULE = OPUS_TIMELINE_RATE * FRAME_MILLIS / 1_000;
@@ -26,53 +26,15 @@ public final class VoiceOpusFrames {
 
     private VoiceOpusFrames() {}
 
-    /**
-     * The voice page has historically emitted a one-byte packet length followed by Opus data.
-     * A small search window tolerates an optional channel/sequence prefix before that stream.
-     */
+    /** Splits one or more complete AIVS audio bodies into fixed 80-byte Opus packets. */
     public static List<byte[]> extract(byte[] stream) {
-        if (stream == null || stream.length < 2) return List.of();
-        List<byte[]> fixedRecords = extractFixedRecords(stream);
-        if (!fixedRecords.isEmpty()) return fixedRecords;
-        List<byte[]> best = List.of();
-        int bestScore = Integer.MIN_VALUE;
-        int maxOffset = Math.min(16, stream.length - 2);
-        for (int offset = 0; offset <= maxOffset; offset++) {
-            List<byte[]> parsed = parseFrom(stream, offset);
-            if (parsed.isEmpty()) continue;
-            int payloadBytes = parsed.stream().mapToInt(packet -> packet.length).sum();
-            // Keep short silence frames, but reject a lone two-byte fragment that commonly
-            // appears in the control marker emitted before the voice stream.
-            if (payloadBytes < 4) continue;
-            int score = parsed.size() * 10_000 + payloadBytes - offset;
-            if (score > bestScore) {
-                bestScore = score;
-                best = parsed;
-            }
-        }
-        return best;
-    }
-
-    /**
-     * Decrypted voice SPP blocks contain one four-byte envelope followed by fixed 80-byte Opus
-     * packets. Each packet represents 20 ms, so the Ogg timeline advances by 960 samples.
-     */
-    private static List<byte[]> extractFixedRecords(byte[] stream) {
-        if (stream.length <= VOICE_BLOCK_HEADER_BYTES
-                || (stream.length - VOICE_BLOCK_HEADER_BYTES) % VOICE_OPUS_PACKET_BYTES != 0) {
-            return List.of();
-        }
-        List<byte[]> packets = new ArrayList<>();
-        for (int offset = VOICE_BLOCK_HEADER_BYTES;
-                offset < stream.length; offset += VOICE_OPUS_PACKET_BYTES) {
-            byte[] packet = Arrays.copyOfRange(stream, offset, offset + VOICE_OPUS_PACKET_BYTES);
-            if (!plausibleOpusPacket(packet)) return List.of();
-            packets.add(packet);
-        }
+        FixedPacketSplitter splitter = new FixedPacketSplitter();
+        List<byte[]> packets = splitter.accept(stream);
+        splitter.reset();
         return packets;
     }
 
-    private static boolean plausibleOpusPacket(byte[] packet) {
+    public static boolean plausibleOpusPacket(byte[] packet) {
         if (packet.length == 0) return false;
         int toc = packet[0] & 0xff;
         int frameCode = toc & 3;
@@ -80,6 +42,56 @@ public final class VoiceOpusFrames {
         if (packet.length < 2) return false;
         int frameCount = packet[1] & 0x3f;
         return frameCount == 0 || frameCount <= 48;
+    }
+
+    /**
+     * Carries a partial packet across AIVS audio bodies. A production body is 400 bytes
+     * ({@code 5 * 80}); the remainder is kept only for a short final chunk.
+     */
+    public static final class FixedPacketSplitter {
+        private final byte[] pending = new byte[VOICE_OPUS_PACKET_BYTES];
+        private int pendingBytes;
+
+        public List<byte[]> accept(byte[] block) {
+            if (block == null || block.length == 0) return List.of();
+            List<byte[]> packets = new ArrayList<>((pendingBytes + block.length)
+                    / VOICE_OPUS_PACKET_BYTES);
+            int offset = 0;
+            if (pendingBytes > 0) {
+                int needed = VOICE_OPUS_PACKET_BYTES - pendingBytes;
+                int copied = Math.min(needed, block.length);
+                System.arraycopy(block, 0, pending, pendingBytes, copied);
+                pendingBytes += copied;
+                offset += copied;
+                if (pendingBytes == VOICE_OPUS_PACKET_BYTES) {
+                    packets.add(pending.clone());
+                    Arrays.fill(pending, (byte) 0);
+                    pendingBytes = 0;
+                }
+            }
+            while (block.length - offset >= VOICE_OPUS_PACKET_BYTES) {
+                packets.add(Arrays.copyOfRange(block, offset,
+                        offset + VOICE_OPUS_PACKET_BYTES));
+                offset += VOICE_OPUS_PACKET_BYTES;
+            }
+            if (offset < block.length) {
+                pendingBytes = block.length - offset;
+                System.arraycopy(block, offset, pending, 0, pendingBytes);
+            }
+            return packets;
+        }
+
+        public byte[] takeRemainder() {
+            if (pendingBytes == 0) return new byte[0];
+            byte[] remainder = Arrays.copyOf(pending, pendingBytes);
+            reset();
+            return remainder;
+        }
+
+        public void reset() {
+            Arrays.fill(pending, (byte) 0);
+            pendingBytes = 0;
+        }
     }
 
     public static byte[] toOggOpus(List<byte[]> packets) {
@@ -99,21 +111,6 @@ public final class VoiceOpusFrames {
             writePage(ogg, packets.get(index), granule, serial, sequence++, headerType);
         }
         return ogg.toByteArray();
-    }
-
-    private static List<byte[]> parseFrom(byte[] stream, int start) {
-        List<byte[]> packets = new ArrayList<>();
-        int position = start;
-        while (position < stream.length) {
-            // Some SPP voice chunks carry a short control header and/or metadata after the
-            // length-prefixed Opus frames. Keep every complete packet from the best offset.
-            if (position + 1 >= stream.length) break;
-            int length = stream[position] & 0xff;
-            if (length < 2 || position + 1 + length > stream.length) break;
-            packets.add(Arrays.copyOfRange(stream, position + 1, position + 1 + length));
-            position += length + 1;
-        }
-        return packets;
     }
 
     private static byte[] opusTags() {

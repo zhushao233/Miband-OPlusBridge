@@ -9,7 +9,8 @@ import java.util.List;
  * Splits the decrypted SPP voice channel into the band's AIVS commands.
  *
  * <p>Wire format: {@code version(1) | type(1) | length(2, big-endian) | data}.
- * Version is 0 on this firmware. Audio data is five 80-byte Opus packets per 400-byte body.</p>
+ * Version is 0 on this firmware. Audio data is five fixed 80-byte Opus packets per
+ * 400-byte body; the block header is not part of the audio body.</p>
  */
 public final class AivsStreamParser {
     public static final int TYPE_START = 1;

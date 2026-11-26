@@ -100,7 +100,9 @@ public final class LiveCommandQueue implements AutoCloseable {
     private final ArrayList<Work> work = new ArrayList<>(CAPACITY + FILE_CAPACITY + 3);
     private final Work[] pending = new Work[256];
     private final long[] retiredUntil = new long[256];
+    private final boolean[] retiredRawAck = new boolean[256];
     private int nextSequence;
+    private int swallowedRetiredRawAcks;
     private boolean drainScheduled;
     private ScheduledFuture<?> sequenceWake;
     private boolean closed;
@@ -235,12 +237,41 @@ public final class LiveCommandQueue implements AutoCloseable {
         if (sequence < 0 || sequence > 255) return;
         synchronized (lock) {
             Work item = pending[sequence];
-            if (item == null) return;
+            if (item == null) {
+                if (retiredRawAck[sequence]) {
+                    retiredRawAck[sequence] = false;
+                    swallowedRetiredRawAcks++;
+                }
+                return;
+            }
+            if (item.raw != null) retiredRawAck[sequence] = true;
             item.acknowledged = true;
             if (!item.wantsResponse() || item.response != null) {
                 finishLocked(item, item.response, null);
                 scheduleDrainLocked();
             }
+        }
+    }
+
+    /**
+     * Retires a raw AIVS instruction after its encrypted SPP write completed. A later transport
+     * ACK belongs to that retired write and is swallowed instead of completing a reused slot.
+     */
+    public void onRawWritten(int sequence) {
+        if (sequence < 0 || sequence > 255) return;
+        synchronized (lock) {
+            Work item = pending[sequence];
+            if (item == null || item.raw == null) return;
+            retiredRawAck[sequence] = true;
+            item.acknowledged = true;
+            finishLocked(item, null, null);
+            scheduleDrainLocked();
+        }
+    }
+
+    public int swallowedRetiredRawAcks() {
+        synchronized (lock) {
+            return swallowedRetiredRawAcks;
         }
     }
 
@@ -394,6 +425,7 @@ public final class LiveCommandQueue implements AutoCloseable {
         if (pending[sequence] != null) return -1;
         long remaining = retiredUntil[sequence] == 0 ? 0 : retiredUntil[sequence] - System.nanoTime();
         if (remaining <= 0) {
+            retiredRawAck[sequence] = false;
             nextSequence = (sequence + 1) & 255;
             return sequence;
         }
@@ -422,6 +454,7 @@ public final class LiveCommandQueue implements AutoCloseable {
         if (item.timeout != null) item.timeout.cancel(false);
         if (item.sequence >= 0) {
             pending[item.sequence] = null;
+            if (item.raw != null) retiredRawAck[item.sequence] = true;
             retiredUntil[item.sequence] = System.nanoTime() + quarantineNanos;
         }
         // User continuation runs after the lock, off the reader and the writer.

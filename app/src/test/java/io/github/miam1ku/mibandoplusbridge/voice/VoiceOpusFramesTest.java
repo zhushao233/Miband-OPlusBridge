@@ -10,71 +10,64 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class VoiceOpusFramesTest {
-    @Test public void extractsOneByteLengthPrefixedPackets() {
-        byte[] stream = new byte[] {
-                3, 0x0b, 0x21, 0x45,
-                2, 0x08, 0x78,
-                4, 0x0a, 0x0b, 0x0c, 0x0d
-        };
+    /**
+     * First 400-byte audio body of voice-1795629664387.raw from the 2026-11-27 band capture.
+     * TOCs are 0x4b, 0x4b, 0x4b, 0x4b, 0x48 at offsets 0, 80, 160, 240 and 320.
+     */
+    private static final String CAPTURED_AUDIO_BODY =
+            "4b410481a7a349c4b2c82a2c2f3761056f61958956bb12576f4900d97f428682"
+            + "515dff491d6d7a301df4a86f23f6784c1fa4511676e86808654359a02e65fd66"
+            + "60e4e5f3ec3a494c21a5a380000000004b41269e1e601be477885ee45e38c5ea"
+            + "fd33f7e76daf1534edb480bc0a7c7caa9bbfc57fad0131fa52c0000000000000"
+            + "0000000000000000000000000000000000000000000000000000000000000000"
+            + "4b410498dddf3c691e362596a5e45a097326cfbe34317b160131b8e6e8402d95"
+            + "b7e4e8a6aaeb2f915b252e008c393e13198cf5bb3c8bbdfd4eaf7d80f6779c9c"
+            + "bd8d798740c7f4125820f328000000004b0100fbf60fab2228f0ba7ccbec6736"
+            + "373ae6b16b397c7dfb835ac3a92e6039777a657fb98e9cf85a37e2ea4a6c9fba"
+            + "c32fb6d115328cccef4a8e92d4d50a5e533b5ae676d7d4da95311d60f839d7c7"
+            + "4800ff6acfb55088689af7c770b7b9a9ea7a57b61496e094d0e0cdb6af649c9d"
+            + "76b5e4cdd4fba61c7f262794753f88aca5d26ec30582346e34172ca65411d48b"
+            + "8f5348b16c34bcf81193be44d3209a80";
 
-        List<byte[]> packets = VoiceOpusFrames.extract(stream);
+    @Test public void extractsFiveFixedPacketsFromCapturedAivsBody() {
+        byte[] body = hex(CAPTURED_AUDIO_BODY);
 
-        assertEquals(3, packets.size());
-        assertArrayEquals(new byte[] {0x0b, 0x21, 0x45}, packets.get(0));
-        assertArrayEquals(new byte[] {0x08, 0x78}, packets.get(1));
-        assertArrayEquals(new byte[] {0x0a, 0x0b, 0x0c, 0x0d}, packets.get(2));
-    }
-
-    @Test public void toleratesOptionalPrefixBeforeFrameStream() {
-        byte[] stream = new byte[] {
-                0x07, 0x01, 0x00,
-                2, 0x08, 0x78,
-                2, 0x08, 0x79
-        };
-
-        List<byte[]> packets = VoiceOpusFrames.extract(stream);
-
-        assertEquals(2, packets.size());
-        assertArrayEquals(new byte[] {0x08, 0x78}, packets.get(0));
-        assertArrayEquals(new byte[] {0x08, 0x79}, packets.get(1));
-    }
-
-    @Test public void extractsPacketsFromOneSppVoiceBlock() {
-        byte[] block = new byte[] {
-                0x13, 0x04, 0x00,
-                3, 0x0b, 0x21, 0x45,
-                2, 0x08, 0x78,
-                4, 0x0a, 0x0b, 0x0c, 0x0d,
-                0x00, 0x01
-        };
-
-        List<byte[]> packets = VoiceOpusFrames.extract(block);
-
-        assertEquals(3, packets.size());
-        assertArrayEquals(new byte[] {0x0b, 0x21, 0x45}, packets.get(0));
-        assertArrayEquals(new byte[] {0x08, 0x78}, packets.get(1));
-        assertArrayEquals(new byte[] {0x0a, 0x0b, 0x0c, 0x0d}, packets.get(2));
-    }
-
-    @Test public void extractsFiveFixedOpusRecordsFromDecryptedVoiceBlock() {
-        byte[] block = new byte[4 + 5 * 80];
-        block[0] = 0x00;
-        block[1] = 0x02;
-        block[2] = 0x01;
-        block[3] = (byte) 0x90;
-        for (int frame = 0; frame < 5; frame++) {
-            int offset = 4 + frame * 80;
-            block[offset] = 0x4b;
-            block[offset + 1] = 0x41;
-            block[offset + 79] = (byte) frame;
-        }
-
-        List<byte[]> packets = VoiceOpusFrames.extract(block);
+        List<byte[]> packets = VoiceOpusFrames.extract(body);
 
         assertEquals(5, packets.size());
-        assertEquals(80, packets.get(0).length);
-        assertEquals(0x4b, packets.get(4)[0] & 0xff);
-        assertEquals(4, packets.get(4)[79] & 0xff);
+        for (byte[] packet : packets) {
+            assertEquals(VoiceOpusFrames.VOICE_OPUS_PACKET_BYTES, packet.length);
+            assertTrue(VoiceOpusFrames.plausibleOpusPacket(packet));
+        }
+        assertEquals(0x4b, packets.get(0)[0] & 0xff);
+        assertEquals(0x4b, packets.get(1)[0] & 0xff);
+        assertEquals(0x4b, packets.get(2)[0] & 0xff);
+        assertEquals(0x4b, packets.get(3)[0] & 0xff);
+        assertEquals(0x48, packets.get(4)[0] & 0xff);
+        assertArrayEquals(java.util.Arrays.copyOfRange(body, 80, 160), packets.get(1));
+    }
+
+    @Test public void splitterCarriesAPacketAcrossTwoAivsBodies() {
+        byte[] body = hex(CAPTURED_AUDIO_BODY);
+        VoiceOpusFrames.FixedPacketSplitter splitter =
+                new VoiceOpusFrames.FixedPacketSplitter();
+
+        assertTrue(splitter.accept(java.util.Arrays.copyOfRange(body, 0, 200)).size() == 2);
+        List<byte[]> packets = splitter.accept(java.util.Arrays.copyOfRange(body, 200, 400));
+
+        assertEquals(3, packets.size());
+        assertArrayEquals(java.util.Arrays.copyOfRange(body, 160, 240), packets.get(0));
+        assertArrayEquals(java.util.Arrays.copyOfRange(body, 240, 320), packets.get(1));
+        assertArrayEquals(java.util.Arrays.copyOfRange(body, 320, 400), packets.get(2));
+    }
+
+    @Test public void splitterDropsAnIncompletePacketAtSessionEnd() {
+        VoiceOpusFrames.FixedPacketSplitter splitter =
+                new VoiceOpusFrames.FixedPacketSplitter();
+
+        assertTrue(splitter.accept(new byte[] {0x4b, 0x41, 0x00}).isEmpty());
+        assertEquals(3, splitter.takeRemainder().length);
+        assertEquals(0, splitter.takeRemainder().length);
     }
 
     @Test public void rejectsRandomControlPayload() {
@@ -116,5 +109,14 @@ public final class VoiceOpusFramesTest {
             if (match) return i;
         }
         return -1;
+    }
+
+    private static byte[] hex(String value) {
+        byte[] bytes = new byte[value.length() / 2];
+        for (int index = 0; index < bytes.length; index++) {
+            bytes[index] = (byte) Integer.parseInt(
+                    value.substring(index * 2, index * 2 + 2), 16);
+        }
+        return bytes;
     }
 }

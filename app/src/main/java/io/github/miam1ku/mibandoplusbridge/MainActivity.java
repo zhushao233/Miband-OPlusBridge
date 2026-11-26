@@ -154,6 +154,7 @@ public final class MainActivity extends AppCompatActivity {
     private AppCompatEditText voiceAsrApiKeyInput;
     private TextView voiceHistorySummary;
     private LinearLayout voiceHistoryList;
+    private int voiceHistoryRequest;
 
     private LinearLayout bonded;
     private TextView bindingStatus;
@@ -616,9 +617,6 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void refreshTools() {
-        if (deviceDetailRow == null) return;
-        deviceDetailRow.setVisibility(new BandStateRepository(this).isRegistered()
-                ? View.VISIBLE : View.GONE);
         if (voiceAssistantRow != null) {
             var voice = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
                     .load(this);
@@ -628,6 +626,9 @@ public final class MainActivity extends AppCompatActivity {
                             : "已开启 · 请补齐转写与对话设置")
                     : "手环小爱语音转自定义大模型");
         }
+        if (deviceDetailRow == null) return;
+        deviceDetailRow.setVisibility(new BandStateRepository(this).isRegistered()
+                ? View.VISIBLE : View.GONE);
     }
 
     // ---- settings tab ----
@@ -1123,9 +1124,20 @@ public final class MainActivity extends AppCompatActivity {
 
     private void refreshVoiceHistory() {
         if (voiceHistoryList == null || voiceHistorySummary == null) return;
-        List<io.github.miam1ku.mibandoplusbridge.voice.VoiceConversationHistory.Entry> entries =
-                new io.github.miam1ku.mibandoplusbridge.voice.VoiceConversationHistory(this)
-                        .recent();
+        int request = ++voiceHistoryRequest;
+        worker.execute(() -> {
+            List<io.github.miam1ku.mibandoplusbridge.voice.VoiceConversationHistory.Entry> entries =
+                    new io.github.miam1ku.mibandoplusbridge.voice.VoiceConversationHistory(this)
+                            .recent();
+            main.post(() -> renderVoiceHistory(entries, request));
+        });
+    }
+
+    private void renderVoiceHistory(
+            List<io.github.miam1ku.mibandoplusbridge.voice.VoiceConversationHistory.Entry> entries,
+            int request) {
+        if (request != voiceHistoryRequest
+                || voiceHistoryList == null || voiceHistorySummary == null) return;
         voiceHistoryList.removeAllViews();
         if (entries.isEmpty()) {
             voiceHistorySummary.setText("本机对话记录为空。");
@@ -1324,26 +1336,34 @@ public final class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "转写接口地址必须是有效的 HTTPS URL", Toast.LENGTH_LONG).show();
             return;
         }
-        boolean saved = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings.save(
-                this,
-                voicePreset.id(),
-                voiceAssistantEnabled != null && voiceAssistantEnabled.isChecked(),
-                baseUrl,
-                voicePreset.usesTranscriptionModel() ? textOf(voiceTranscriptionModelInput) : "",
-                textOf(voiceChatModelInput),
-                textOf(voiceSystemPromptInput),
-                textOf(voiceApiKeyInput),
-                voiceAssistantCaptureRaw != null && voiceAssistantCaptureRaw.isChecked(),
-                asrUrl,
-                textOf(voiceAsrApiKeyInput));
-        if (!saved) {
-            Toast.makeText(this, "请检查设置后再保存；启用时需填写两处 HTTPS 地址和对应 API Key",
-                    Toast.LENGTH_LONG).show();
-            return;
-        }
-        loadVoiceAssistantControls();
-        refreshTools();
-        Toast.makeText(this, "语音助手设置已保存", Toast.LENGTH_SHORT).show();
+        String presetId = voicePreset.id();
+        boolean enabled = voiceAssistantEnabled != null && voiceAssistantEnabled.isChecked();
+        String transcriptionModel = voicePreset.usesTranscriptionModel()
+                ? textOf(voiceTranscriptionModelInput) : "";
+        String chatModel = textOf(voiceChatModelInput);
+        String systemPrompt = textOf(voiceSystemPromptInput);
+        String apiKey = textOf(voiceApiKeyInput);
+        boolean captureRaw = voiceAssistantCaptureRaw != null
+                && voiceAssistantCaptureRaw.isChecked();
+        String asrApiKey = textOf(voiceAsrApiKeyInput);
+        worker.execute(() -> {
+            boolean saved = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                    .save(this, presetId, enabled, baseUrl, transcriptionModel, chatModel,
+                            systemPrompt, apiKey, captureRaw, asrUrl, asrApiKey);
+            main.post(() -> {
+                if (!saved) {
+                    Toast.makeText(this,
+                            "请检查设置后再保存；启用时需填写两处 HTTPS 地址和对应 API Key",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog
+                        .setFrameTraceEnabled(captureRaw);
+                loadVoiceAssistantControls();
+                refreshTools();
+                Toast.makeText(this, "语音助手设置已保存", Toast.LENGTH_SHORT).show();
+            });
+        });
     }
 
     private static String textOf(AppCompatEditText input) {

@@ -15,6 +15,8 @@ public final class BandScheduleCommand {
 
     public static final int REPEAT_ONCE = 0;
     public static final int REPEAT_DAILY = 1;
+    /** Captured weekday alarms use repeatMode 5 and a seven-bit repeatFlags mask. */
+    public static final int REPEAT_WEEKLY = 5;
     public static final int ALARM_SMART = 1;
     public static final int ALARM_NORMAL = 2;
 

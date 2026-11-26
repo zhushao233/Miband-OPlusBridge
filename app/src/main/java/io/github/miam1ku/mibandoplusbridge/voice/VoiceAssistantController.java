@@ -43,7 +43,6 @@ public final class VoiceAssistantController implements AutoCloseable {
     private static final long DIALOG_FINISH_DELAY_MS = 120L;
     private static final int PARTIAL_WINDOW_PACKETS = 500;
     private static final int MIN_PARTIAL_PACKETS = 10;
-    private static final int OPUS_PACKET_BYTES = 80;
     private static final int MAX_DEBUG_SAMPLE_BYTES = 64 * 1024;
     private static final int PROBE_BYTES = 16;
 
@@ -69,7 +68,8 @@ public final class VoiceAssistantController implements AutoCloseable {
         return thread;
     });
     private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
-    private final ByteArrayOutputStream audioRemainder = new ByteArrayOutputStream();
+    private final VoiceOpusFrames.FixedPacketSplitter packetSplitter =
+            new VoiceOpusFrames.FixedPacketSplitter();
     private final Set<String> loggedFrameGroups = new HashSet<>();
     private final List<byte[]> opusPackets = new ArrayList<>();
     private final OpusVoiceActivityDetector voiceActivity;
@@ -163,6 +163,7 @@ public final class VoiceAssistantController implements AutoCloseable {
             SessionLog.line(context, "VOICE_CMD type=start bytes=" + command.data().length
                     + " sid=" + command.sessionId() + " tts=" + command.ttsEnabled());
             VoiceAssistantSettings.Values loaded = VoiceAssistantSettings.load(context);
+            SessionLog.setFrameTraceEnabled(loaded.captureRaw());
             if (!loaded.complete()) {
                 SessionLog.line(context, "VOICE_SETTINGS waiting-for-config");
                 return;
@@ -224,24 +225,14 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private void appendAudio(byte[] data, VoiceAssistantSettings.Values settings) {
         if (data == null || data.length == 0) return;
-        List<byte[]> ready = new ArrayList<>();
+        List<byte[]> ready;
         long now = System.currentTimeMillis();
         boolean tooLarge = false;
         synchronized (this) {
             if (closed || !sessionActive || finalizing) return;
             if (captured.size() == 0) firstChunkProbe = hexPrefix(data);
             captured.writeBytes(data);
-            audioRemainder.writeBytes(data);
-            byte[] buffered = audioRemainder.toByteArray();
-            int offset = 0;
-            while (buffered.length - offset >= OPUS_PACKET_BYTES) {
-                ready.add(Arrays.copyOfRange(buffered, offset, offset + OPUS_PACKET_BYTES));
-                offset += OPUS_PACKET_BYTES;
-            }
-            audioRemainder.reset();
-            if (offset < buffered.length) {
-                audioRemainder.write(buffered, offset, buffered.length - offset);
-            }
+            ready = packetSplitter.accept(data);
             opusPackets.addAll(ready);
             packets++;
             lastAudioAt = now;
@@ -359,6 +350,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         long currentGeneration;
         int chunkCount;
         int commandCount;
+        int droppedTail;
         String probe;
         boolean heard;
         synchronized (this) {
@@ -368,10 +360,9 @@ public final class VoiceAssistantController implements AutoCloseable {
             currentGeneration = generation;
             if (idleFinish != null) idleFinish.cancel(false);
             idleFinish = null;
-            if (audioRemainder.size() > 0) {
-                opusPackets.add(audioRemainder.toByteArray());
-                audioRemainder.reset();
-            }
+            byte[] remainder = packetSplitter.takeRemainder();
+            droppedTail = remainder.length;
+            Arrays.fill(remainder, (byte) 0);
             opus = clonePackets(opusPackets, 0);
             chunkCount = packets;
             commandCount = audioCommands;
@@ -383,6 +374,9 @@ public final class VoiceAssistantController implements AutoCloseable {
             sessionActive = false;
             resetCaptureLocked();
             voiceActivity.reset();
+        }
+        if (droppedTail > 0) {
+            SessionLog.line(context, "VOICE_AUDIO dropped-tail bytes=" + droppedTail);
         }
         if (!"band-end".equals(reason)) {
             send(sid, AivsInstructionCodec.stopCapture(sid));
@@ -414,7 +408,16 @@ public final class VoiceAssistantController implements AutoCloseable {
                 + " audioCommands=" + commandCount
                 + " probe=" + probe + " speechSeen=" + heard
                 + " gen=" + currentGeneration);
-        apiWorker.execute(() -> finalizeSession(settings, ogg, sid, tts, currentGeneration));
+        try {
+            apiWorker.execute(() -> finalizeSession(settings, ogg, sid, tts, currentGeneration));
+        } catch (RuntimeException rejected) {
+            Arrays.fill(ogg, (byte) 0);
+            SessionLog.line(context, "VOICE_API worker-rejected");
+            if (isCurrent(currentGeneration)) {
+                sendError(sid, "语音助手正在恢复，请稍后再试。", tts);
+                onFailure.accept("VOICE_API_WORKER_REJECTED");
+            }
+        }
     }
 
     private void finalizeSession(VoiceAssistantSettings.Values settings, byte[] ogg,
@@ -474,9 +477,9 @@ public final class VoiceAssistantController implements AutoCloseable {
                     }
                     if (!isCurrent(currentGeneration)) return;
                     String reply = app == null
-                            ? "没有识别到要打开的手环应用。"
+                            ? "请指定要打开的手环应用。"
                             : sent ? "正在打开" + app.label() + "。"
-                            : "手环连接已断开，未能打开" + app.label() + "。";
+                            : "手环当前处于断开状态，请连接后再打开" + app.label() + "。";
                     publishAnswer(transcript, reply, VoiceConversationHistory.Kind.WATCH);
                     return;
                 }
@@ -611,7 +614,7 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private void resetCaptureLocked() {
         captured.reset();
-        audioRemainder.reset();
+        packetSplitter.reset();
         wipe(opusPackets);
         opusPackets.clear();
         packets = 0;
@@ -621,7 +624,10 @@ public final class VoiceAssistantController implements AutoCloseable {
         firstChunkProbe = "";
         speechSeen = false;
         sessionSettings = null;
-        idleFinish = null;
+        if (idleFinish != null) {
+            idleFinish.cancel(false);
+            idleFinish = null;
+        }
     }
 
     private void logFrameDiagnostics(String stage, int streamBytes, int chunks,
@@ -677,7 +683,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         finalizing = false;
         if (idleFinish != null) idleFinish.cancel(false);
         captured.reset();
-        audioRemainder.reset();
+        packetSplitter.reset();
         voiceActivity.close();
         wipe(opusPackets);
         opusPackets.clear();

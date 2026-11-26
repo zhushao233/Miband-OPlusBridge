@@ -153,6 +153,8 @@ public final class VoiceConversationHistory {
     private static String clean(String value, int limit) {
         if (value == null) return "";
         String cleaned = value.replace('\u0000', ' ').trim();
-        return cleaned.length() <= limit ? cleaned : cleaned.substring(0, limit);
+        int characters = cleaned.codePointCount(0, cleaned.length());
+        if (characters <= limit || limit <= 0) return limit <= 0 ? "" : cleaned;
+        return cleaned.substring(0, cleaned.offsetByCodePoints(0, limit));
     }
 }

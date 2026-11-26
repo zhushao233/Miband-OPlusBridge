@@ -77,6 +77,32 @@ public final class LiveCommandQueueTest {
         }
     }
 
+    @Test public void rawAivsWriteRetiresItsLateTransportAck() throws Exception {
+        BlockingQueue<Integer> rawWrites = new LinkedBlockingQueue<>();
+        BlockingQueue<Integer> commandWrites = new LinkedBlockingQueue<>();
+        try (var queue = new LiveCommandQueue(0, SESSION_TIMEOUT_MS,
+                (sequence, command) -> commandWrites.add(sequence),
+                (sequence, payload) -> rawWrites.add(sequence))) {
+            var raw = queue.sendRaw(new byte[] {(byte) 0x08, 0x0e});
+            Integer rawSequence = rawWrites.poll(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertNotNull(rawSequence);
+            queue.onRawWritten(rawSequence);
+            await(raw);
+
+            queue.onAck(rawSequence);
+            assertEquals(1, queue.swallowedRetiredRawAcks());
+
+            var next = queue.send(command(3, 1));
+            Integer nextSequence = commandWrites.poll(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertNotNull(nextSequence);
+            assertFalse(nextSequence.equals(rawSequence));
+            queue.onAck(rawSequence);
+            assertFalse(next.toCompletableFuture().isDone());
+            queue.onAck(nextSequence);
+            await(next);
+        }
+    }
+
     @Test public void ackRegisteredBeforeWriteCanArriveInsideSender() throws Exception {
         AtomicReference<LiveCommandQueue> owner = new AtomicReference<>();
         try (var queue = new LiveCommandQueue(0, SESSION_TIMEOUT_MS, (sequence, outgoing) -> {

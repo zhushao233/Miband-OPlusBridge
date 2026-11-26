@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.voice;
 
+import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 
 public final class AivsInstructionCodecTest {
+    @Test public void aivsBodyLooksLikeACommandAndMustRouteByVoiceChannel() throws Exception {
+        byte[] body = AivsInstructionCodec.toast(0, "hi");
+
+        XiaomiProto.Command command = XiaomiProto.Command.parseFrom(body);
+
+        assertEquals(14, command.getType());
+        assertEquals(0, command.getSubtype());
+    }
+
     @Test public void encodesFinalAsrResultWithSessionId() {
         assertArrayEquals(new byte[] {
                 0x08, 0x0e, 0x10, 0x00, (byte) 0x82, 0x01, 0x18,
