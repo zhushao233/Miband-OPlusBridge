@@ -19,6 +19,7 @@ import org.concentus.OpusException;
 final class OpusVoiceActivityDetector implements AutoCloseable {
     private static final int MAX_QUEUED_PACKETS = 2_000;
     private static final int MAX_CONSECUTIVE_DECODE_FAILURES = 100;
+    /** Measured on the target band; a fixed threshold keeps this PR free of a new setting. */
     private static final double MIN_VOICE_RMS = 200.0;
     private static final int METRICS_FRAME_INTERVAL = 250;
 
@@ -46,7 +47,7 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
 
     OpusVoiceActivityDetector(android.content.Context context, Runnable onSpeechStart,
                               Runnable onSpeechEnd, Consumer<Boolean> onAvailability) {
-        this.context = context.getApplicationContext();
+        this.context = context == null ? null : context.getApplicationContext();
         this.onSpeechStart = onSpeechStart;
         this.onSpeechEnd = onSpeechEnd;
         this.onAvailability = onAvailability;
@@ -195,13 +196,15 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
                     Math.round(samples * 1_000f / OpusPcmDecoder.SAMPLE_RATE_HZ));
             boolean voiced = rms >= MIN_VOICE_RMS;
             VoiceActivityState.Event event;
+            long voicedMillis;
             synchronized (lock) {
                 event = state.observe(voiced, durationMillis);
+                voicedMillis = state.voicedMillis();
             }
             recordMetrics(rms);
             if (event == VoiceActivityState.Event.START) {
                 SessionLog.line(context, "VOICE_VAD start voicedMs="
-                        + state.voicedMillis());
+                        + voicedMillis);
                 runCallback(onSpeechStart, "start");
             } else if (event == VoiceActivityState.Event.END) {
                 SessionLog.line(context, "VOICE_VAD end=silence");
