@@ -1584,8 +1584,8 @@ public final class MainActivity extends AppCompatActivity {
             nativeOwned = new OwnershipController(this).nativeReady();
         } catch (RuntimeException ignored) { }
         boolean accountConfirmed = false;
-        try {
-            accountConfirmed = new HealthRecordStore(this).confirmedAccountHash() != null;
+        try (HealthRecordStore store = new HealthRecordStore(this)) {
+            accountConfirmed = store.confirmedAccountHash() != null;
         } catch (Exception ignored) { }
         return new SetupProgress(rootGranted, hasBinding, hasProfile, registered, nativeOwned, accountConfirmed);
     }
