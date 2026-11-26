@@ -913,8 +913,10 @@ public final class SppDiagnosticClient implements AutoCloseable {
     }
 
     /**
-     * AIVS instructions use the protobuf channel but carry a raw oyt body. The official
-     * wearable core sends business type 101 this way: channel 1, encrypted, no Command wrapper.
+     * AIVS instructions are sent on the encrypted protobuf channel as a Xiaomi command
+     * {@code type=14}, with the AIVS instruction list in field 16. The microphone stream is the
+     * opposite direction and uses the voice channel. Payload parseability is therefore not a
+     * routing signal; inbound voice frames must be selected by their channel.
      */
     private void writeLiveAivs(int sequence, byte[] payload) throws Exception {
         try {

@@ -8,7 +8,11 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
 public final class AivsInstructionCodecTest {
-    @Test public void aivsBodyLooksLikeACommandAndMustRouteByVoiceChannel() throws Exception {
+    /**
+     * The outbound envelope is intentionally a type-14 Xiaomi command. Inbound routing must
+     * use the voice channel rather than the fact that this payload also parses as a Command.
+     */
+    @Test public void outboundAivsEnvelopeIsAlsoAValidType14Command() throws Exception {
         byte[] body = AivsInstructionCodec.toast(0, "hi");
 
         XiaomiProto.Command command = XiaomiProto.Command.parseFrom(body);

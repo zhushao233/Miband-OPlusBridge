@@ -14,6 +14,13 @@ import java.util.List;
  * s21.a { repeated field 1 = s21 }
  * s21 { field 1 = code; field 2 = a41; field 3 = n41; field 11 = c41; field 13 = sessionId }
  * </pre>
+ *
+ * <p>{@code field 1 = 14} is the Xiaomi protobuf command type, not an accidental collision.
+ * These outbound instructions are intentionally a valid {@code XiaomiProto.Command(type=14)}
+ * envelope on the encrypted protobuf channel. The band's microphone stream is the opposite
+ * direction and arrives on the voice channel as AIVS v0 blocks. Do not use "parses as a
+ * Command" as a routing signal in either direction; {@code AivsInstructionCodecTest} pins this
+ * ambiguity.</p>
  */
 public final class AivsInstructionCodec {
     public static final int CODE_ASR_RESULT = 2;

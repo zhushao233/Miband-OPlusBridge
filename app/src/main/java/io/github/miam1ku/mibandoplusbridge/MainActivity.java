@@ -1083,7 +1083,8 @@ public final class MainActivity extends AppCompatActivity {
         voiceAsrApiKeyInput = configInput("留空则保留已保存的转写密钥",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         addConfigField(controls, "转写 API Key", voiceAsrApiKeyInput);
-        voiceTranscriptionModelInput = configInput("留空则由服务端决定", InputType.TYPE_CLASS_TEXT);
+        voiceTranscriptionModelInput = configInput(
+                "留空则使用服务商默认模型", InputType.TYPE_CLASS_TEXT);
         addConfigField(controls, "转写模型", voiceTranscriptionModelInput);
         voiceAssistantPage.caption(controls,
                 "Kimi、Qwen、OpenRouter 使用各自的对话接口；转写可继续使用 OpenAI、"
@@ -1268,7 +1269,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         if (voiceTranscriptionModelInput != null) {
             voiceTranscriptionModelInput.setText(voice.transcriptionModel());
-            voiceTranscriptionModelInput.setHint("留空则由服务端决定");
+            voiceTranscriptionModelInput.setHint("留空则使用服务商默认模型");
         }
     }
 
@@ -1338,8 +1339,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         String presetId = voicePreset.id();
         boolean enabled = voiceAssistantEnabled != null && voiceAssistantEnabled.isChecked();
-        String transcriptionModel = voicePreset.usesTranscriptionModel()
-                ? textOf(voiceTranscriptionModelInput) : "";
+        String transcriptionModel = textOf(voiceTranscriptionModelInput);
         String chatModel = textOf(voiceChatModelInput);
         String systemPrompt = textOf(voiceSystemPromptInput);
         String apiKey = textOf(voiceApiKeyInput);
