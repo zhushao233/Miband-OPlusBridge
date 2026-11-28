@@ -81,6 +81,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     });
     private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
     private final VoiceOpusFrames.FixedPacketSplitter packetSplitter;
+    /** Bounded frame-log dedupe key: 16 channels x 4 opcodes x 16 flag nibbles. */
     private final Set<Integer> loggedFrameGroups = new HashSet<>();
     private final List<byte[]> opusPackets = new ArrayList<>();
     private final OpusVoiceActivityDetector voiceActivity;
@@ -157,7 +158,7 @@ public final class VoiceAssistantController implements AutoCloseable {
                                int opcode, byte[] payload) {
         if (closed || payload == null || payload.length == 0) return;
         if (channel == SppV2Codec.CHANNEL_MULTI_MODAL) {
-            if (loggedFrameGroups.add(frameGroup(channel, opcode))) {
+            if (loggedFrameGroups.add(frameGroup(channel, opcode, flags))) {
                 SessionLog.line(context, "VOICE_MULTI_MODAL channel=" + channel
                         + " opcode=" + opcode + " flags=" + flags
                         + " bytes=" + payload.length + " frx=" + frx);
@@ -175,7 +176,7 @@ public final class VoiceAssistantController implements AutoCloseable {
             lastPayloadHash = hash;
         }
 
-        if (loggedFrameGroups.add(frameGroup(channel, opcode))) {
+        if (loggedFrameGroups.add(frameGroup(channel, opcode, flags))) {
             SessionLog.line(context, "VOICE_FRAME channel=" + channel + " opcode=" + opcode
                     + " flags=" + flags + " bytes=" + payload.length + " frx=" + frx);
         }
@@ -820,8 +821,8 @@ public final class VoiceAssistantController implements AutoCloseable {
     }
 
     /** One log line per channel/opcode pair keeps unknown voice traffic from flooding the log. */
-    private static int frameGroup(int channel, int opcode) {
-        return (channel << 8) | (opcode & 0xff);
+    private static int frameGroup(int channel, int opcode, int flags) {
+        return ((channel & 0xf) << 8) | ((opcode & 0x3) << 4) | (flags & 0xf);
     }
 
     private static void wipe(List<byte[]> packets) {
