@@ -43,10 +43,12 @@ class CouiConfirmDialog private constructor(
     private val message: String,
     private val dismissText: String,
     private val confirmText: String,
+    private val neutralText: String?,
     private val accentColor: Int,
     private val contourGlowEnabled: Boolean,
     private val onDismiss: Runnable?,
     private val onConfirm: Runnable?,
+    private val onNeutral: Runnable?,
 ) {
     private val composeView = ComposeView(activity)
     private val backdropNode = RenderNode("coui-confirm-dialog-backdrop")
@@ -108,16 +110,22 @@ class CouiConfirmDialog private constructor(
                                 .couiBackdrop(backdrop),
                         )
                         Dialog(
-                            onDismissRequest = { finish(confirmed = false) },
+                            onDismissRequest = { finish(Outcome.DISMISS) },
                             title = title,
                             message = message,
                             dismissAction = CouiDialogAction(
                                 text = dismissText,
-                                onClick = { finish(confirmed = false) },
+                                onClick = { finish(Outcome.DISMISS) },
                             ),
+                            neutralAction = neutralText?.let { text ->
+                                CouiDialogAction(
+                                    text = text,
+                                    onClick = { finish(Outcome.NEUTRAL) },
+                                )
+                            },
                             confirmAction = CouiDialogAction(
                                 text = confirmText,
-                                onClick = { finish(confirmed = true) },
+                                onClick = { finish(Outcome.CONFIRM) },
                                 style = CouiDialogActionStyle.Primary,
                                 colors = CouiDialogDefaults.primaryActionColors(Color(accentColor)),
                             ),
@@ -172,15 +180,21 @@ class CouiConfirmDialog private constructor(
         }
     }
 
-    private fun finish(confirmed: Boolean) {
+    private fun finish(outcome: Outcome) {
         if (finished) return
         finished = true
         visible = false
         composeView.postDelayed({
             (composeView.parent as? ViewGroup)?.removeView(composeView)
-            if (confirmed) onConfirm?.run() else onDismiss?.run()
+            when (outcome) {
+                Outcome.CONFIRM -> onConfirm?.run()
+                Outcome.NEUTRAL -> onNeutral?.run()
+                Outcome.DISMISS -> onDismiss?.run()
+            }
         }, 190L)
     }
+
+    private enum class Outcome { DISMISS, CONFIRM, NEUTRAL }
 
     companion object {
         @JvmStatic
@@ -195,16 +209,36 @@ class CouiConfirmDialog private constructor(
             onDismiss: Runnable?,
             onConfirm: Runnable?,
         ) {
+            show(activity, title, message, dismissText, confirmText, null,
+                accentColor, contourGlowEnabled, onDismiss, onConfirm, null)
+        }
+
+        @JvmStatic
+        fun show(
+            activity: Activity,
+            title: String,
+            message: String,
+            dismissText: String,
+            confirmText: String,
+            neutralText: String?,
+            accentColor: Int,
+            contourGlowEnabled: Boolean,
+            onDismiss: Runnable?,
+            onConfirm: Runnable?,
+            onNeutral: Runnable?,
+        ) {
             CouiConfirmDialog(
                 activity = activity,
                 title = title,
                 message = message,
                 dismissText = dismissText,
                 confirmText = confirmText,
+                neutralText = neutralText,
                 accentColor = accentColor,
                 contourGlowEnabled = contourGlowEnabled,
                 onDismiss = onDismiss,
                 onConfirm = onConfirm,
+                onNeutral = onNeutral,
             ).show()
         }
     }

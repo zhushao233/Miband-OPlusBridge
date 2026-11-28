@@ -15,6 +15,7 @@ import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.notify.SleepProtectionSchedule;
+import io.github.miam1ku.mibandoplusbridge.protocol.BandDndCommand;
 import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
 import java.io.File;
 import java.io.FileWriter;
@@ -106,6 +107,20 @@ public final class BandLiveService extends Service {
     private static final int REALTIME_STATS_STOP = 46;
     private WeatherSync weatherSync;
     private HealthReplay healthReplay;
+    private io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantController voiceAssistant;
+    private final Object alarmLock = new Object();
+    private final Object voiceCommandLock = new Object();
+    private io.github.miam1ku.mibandoplusbridge.voice.WatchCommand.Kind pendingDestructiveKind;
+    private long pendingDestructiveUntil;
+    private volatile java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+            alarms = java.util.List.of();
+    /**
+     * One in-flight alarm query. The voice controller runs watch commands serially on its
+     * commandWorker, so a second query cannot overlap the first. If that serialisation ever
+     * changes, replace this slot with a queue: an overwritten future would never complete.
+     */
+    private java.util.concurrent.CompletableFuture<java.util.List<
+            io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>> alarmQuery;
     private volatile long sessionEpoch;
     private static final java.util.concurrent.atomic.AtomicLong SESSION_IDS = new java.util.concurrent.atomic.AtomicLong();
     private io.github.miam1ku.mibandoplusbridge.notify.PhoneCallMonitor calls;
@@ -742,6 +757,186 @@ public final class BandLiveService extends Service {
         return queue.send(command);
     }
 
+    private String executeVoiceWatchCommand(
+            io.github.miam1ku.mibandoplusbridge.voice.WatchCommand command) throws Exception {
+        if (command == null) throw new IllegalArgumentException("VOICE_WATCH_COMMAND");
+        String confirmation = destructiveConfirmation(command);
+        if (confirmation != null) return confirmation;
+        switch (command.kind()) {
+            case ASK_ALARM_TIME -> {
+                return "要设置几点的闹钟？可以说“设置明早七点的闹钟”。";
+            }
+            case ASK_DURATION -> {
+                return "要计时多久？可以说“计时十分钟”或“半小时后提醒我”。";
+            }
+            case SET_DND -> {
+                sendWatchCommand(BandDndCommand.state(command.enabled()));
+                sendWatchCommand(BandDndCommand.phoneRules(command.enabled(),
+                        BandDndCommand.activatedAt(System.currentTimeMillis())));
+                return command.enabled() ? "已打开勿扰模式。" : "已关闭勿扰模式。";
+            }
+            case OPEN_WATCH_APP -> {
+                throw new IllegalArgumentException("VOICE_WATCH_APP_REQUIRES_AIVS");
+            }
+            case SET_ALARM -> {
+                sendWatchCommand(io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand
+                        .createAlarm(command.hour(), command.minute(), command.daily()));
+                return "已设置" + (command.daily() ? "每天 " : " ")
+                        + clockText(command.hour(), command.minute()) + " 的闹钟。";
+            }
+            case SET_TIMER -> {
+                if (command.minutes() < 1 || command.minutes() > 1439) {
+                    return "计时需要在 1 分钟到 23 小时 59 分钟之间。";
+                }
+                java.time.LocalTime target = java.time.LocalTime.now()
+                        .plusMinutes(command.minutes());
+                sendWatchCommand(io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand
+                        .createAlarm(target.getHour(), target.getMinute(), false));
+                return "已设置 " + durationText(command.minutes()) + " 后的提醒，"
+                        + clockText(target.getHour(), target.getMinute()) + " 响铃。";
+            }
+            case LIST_ALARMS -> {
+                java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+                        current = queryAlarms();
+                if (current.isEmpty()) return "手环里的闹钟列表为空。";
+                StringBuilder reply = new StringBuilder("手环里有 ")
+                        .append(current.size()).append(" 个闹钟：");
+                int shown = Math.min(5, current.size());
+                for (int index = 0; index < shown; index++) {
+                    var alarm = current.get(index);
+                    if (index > 0) reply.append('、');
+                    reply.append(clockText(alarm.hour(), alarm.minute()));
+                    if (!alarm.enabled()) reply.append("（已关闭）");
+                }
+                if (current.size() > shown) reply.append(" 等");
+                return reply.append('。').toString();
+            }
+            case DELETE_ALL_ALARMS -> {
+                java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+                        current = queryAlarms();
+                if (current.isEmpty()) return "手环里的闹钟列表为空。";
+                deleteAlarms(current);
+                return "已删除手环里的 " + current.size() + " 个闹钟。";
+            }
+            case DELETE_ALARM_AT -> {
+                java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+                        current = queryAlarms();
+                java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+                        matches = current.stream()
+                        .filter(alarm -> alarm.hour() == command.hour()
+                                && alarm.minute() == command.minute())
+                        .toList();
+                if (matches.isEmpty()) {
+                    return "手环里暂无 " + clockText(command.hour(), command.minute())
+                            + " 的闹钟。";
+                }
+                deleteAlarms(matches);
+                return "已取消 " + clockText(command.hour(), command.minute()) + " 的闹钟。";
+            }
+            case DELETE_NEXT_ALARM -> {
+                java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+                        current = queryAlarms();
+                var next = io.github.miam1ku.mibandoplusbridge.protocol.BandAlarmSelection
+                        .nearest(current, java.time.LocalDateTime.now());
+                if (next == null) return "手环里的已启用闹钟列表为空。";
+                deleteAlarms(java.util.List.of(next));
+                return "已取消最近的一个闹钟：" + clockText(next.hour(), next.minute()) + "。";
+            }
+            case FIND_PHONE -> {
+                io.github.miam1ku.mibandoplusbridge.notify.FindPhone.start(this);
+                return "正在让手机响铃。";
+            }
+            case PAUSE_MUSIC -> {
+                io.github.miam1ku.mibandoplusbridge.notify.NativeMusic.pause(this);
+                return "已暂停手机音乐。";
+            }
+            default -> throw new IllegalArgumentException("VOICE_WATCH_COMMAND");
+        }
+    }
+
+    private String destructiveConfirmation(
+            io.github.miam1ku.mibandoplusbridge.voice.WatchCommand command) {
+        io.github.miam1ku.mibandoplusbridge.voice.WatchCommand.Kind kind = command.kind();
+        if (kind != io.github.miam1ku.mibandoplusbridge.voice.WatchCommand.Kind.DELETE_ALL_ALARMS
+                && kind != io.github.miam1ku.mibandoplusbridge.voice.WatchCommand.Kind
+                        .DELETE_NEXT_ALARM) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        synchronized (voiceCommandLock) {
+            if (command.confirmed()
+                    && pendingDestructiveKind == kind && now <= pendingDestructiveUntil) {
+                pendingDestructiveKind = null;
+                pendingDestructiveUntil = 0;
+                return null;
+            }
+            pendingDestructiveKind = kind;
+            pendingDestructiveUntil = now + 15_000L;
+        }
+        return kind == io.github.miam1ku.mibandoplusbridge.voice.WatchCommand.Kind
+                .DELETE_ALL_ALARMS
+                ? "这会删除全部闹钟。请在 15 秒内再说一次“确认取消所有闹钟”来完成。"
+                : "这会取消最近一个已启用的闹钟。请在 15 秒内再说一次“确认取消闹钟”来完成。";
+    }
+
+    private void sendWatchCommand(
+            nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command)
+            throws Exception {
+        sendSessionCommand(command).toCompletableFuture().get(5, TimeUnit.SECONDS);
+    }
+
+    private java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+            queryAlarms() throws Exception {
+        java.util.concurrent.CompletableFuture<java.util.List<
+                io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>> pending;
+        synchronized (alarmLock) {
+            pending = new java.util.concurrent.CompletableFuture<>();
+            alarmQuery = pending;
+        }
+        try {
+            sendWatchCommand(io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand
+                    .getAlarms());
+            return pending.get(4, TimeUnit.SECONDS);
+        } finally {
+            synchronized (alarmLock) {
+                if (alarmQuery == pending) alarmQuery = null;
+            }
+        }
+    }
+
+    private void noteAlarms(
+            nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Alarms received) {
+        java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
+                parsed = io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand
+                .parseAlarms(received);
+        alarms = parsed;
+        synchronized (alarmLock) {
+            if (alarmQuery != null) alarmQuery.complete(parsed);
+        }
+    }
+
+    private void deleteAlarms(java.util.List<
+            io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm> entries)
+            throws Exception {
+        java.util.List<Integer> ids = entries.stream()
+                .map(io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm::id)
+                .toList();
+        sendWatchCommand(io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand
+                .deleteAlarms(ids));
+        alarms = alarms.stream().filter(alarm -> !ids.contains(alarm.id())).toList();
+    }
+
+    private static String clockText(int hour, int minute) {
+        return String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minute);
+    }
+
+    private static String durationText(int minutes) {
+        if (minutes < 60) return minutes + " 分钟";
+        int hours = minutes / 60;
+        int remainder = minutes % 60;
+        return remainder == 0 ? hours + " 小时" : hours + " 小时 " + remainder + " 分钟";
+    }
+
 
     public static java.util.concurrent.CompletionStage<Void> sendNotification(Context context,
             nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
@@ -1083,6 +1278,9 @@ public final class BandLiveService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.start(this);
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.setFrameTraceEnabled(
+                io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                        .load(this).captureRaw());
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this, "module start");
         io.github.miam1ku.mibandoplusbridge.data.DeviceImageStore.requestRefresh(this);
         dndSync.seed(bandSyncEnabled(this));
@@ -1093,6 +1291,32 @@ public final class BandLiveService extends Service {
                 coordinator.execute(() -> { if (!stopRequested && historySync != null) historySync.resume(); });
             } catch (java.util.concurrent.RejectedExecutionException stopping) { }
         });
+        voiceAssistant = new io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantController(
+                this,
+                instruction -> {
+                    SppDiagnosticClient active = client;
+                    if (active == null) return false;
+                    try {
+                        active.sendAivs(instruction).whenComplete((ignored, error) -> {
+                            if (error != null) {
+                                String code = error.getMessage();
+                                if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
+                                    code = error.getClass().getSimpleName();
+                                }
+                                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                                        "VOICE_AIVS transport-failed " + code);
+                            }
+                        });
+                        return true;
+                    } catch (RuntimeException unavailable) {
+                        return false;
+                    }
+                },
+                this::executeVoiceWatchCommand,
+                question -> weatherSync == null ? "" : weatherSync.conversationContext(question),
+                transcript -> main.post(() -> deliverVoiceTranscript(transcript)),
+                answer -> main.post(() -> deliverVoiceAnswer(answer)),
+                failure -> main.post(() -> deliverVoiceFailure(failure)));
         calls = new io.github.miam1ku.mibandoplusbridge.notify.PhoneCallMonitor(this, coordinator);
         io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(this);
         HostKeepAlive.runRoot(() -> {
@@ -1267,6 +1491,8 @@ public final class BandLiveService extends Service {
                         healthCollectionStatus(code);
                     }
                 });
+                active.setUnknownDataObserver(voiceAssistant::onUnknownFrame);
+                voiceAssistant.resetTransport();
                 active.setSleepFiles(measurements -> {
                     try {
                         coordinator.execute(() -> {
@@ -1395,7 +1621,7 @@ public final class BandLiveService extends Service {
                         if (client == active && !stopRequested && historySync != null) historySync.saved(fileId);
                     }), command -> {
                         if (command.getType() == 2) {
-                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(BandLiveService.this,
+                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.trace(BandLiveService.this,
                                     describeSystem(command));
                             noteBandRules(command);
                             noteBandDndSync(command);
@@ -1406,13 +1632,11 @@ public final class BandLiveService extends Service {
                             });
                         } else if (command.getType() == 10 || command.getType() == 7 || command.getType() == 18
                                 || deviceLogReceiver != null) {
-                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(BandLiveService.this,
+                            io.github.miam1ku.mibandoplusbridge.data.SessionLog.trace(BandLiveService.this,
                                     "rx type=" + command.getType() + " subtype=" + command.getSubtype()
                                             + " status=" + command.getStatus());
                         }
                         if (command.getType() == 7) {
-                            android.util.Log.i("OplusBandBridge", "NOTIFY_IN subtype=" + command.getSubtype()
-                                    + " status=" + command.getStatus());
                             if (command.getSubtype() == 16 && command.hasNotification()
                                     && command.getNotification().hasNotificationIconQuery()) {
                                 offerIcon(command.getNotification().getNotificationIconQuery().getPackage());
@@ -1449,6 +1673,13 @@ public final class BandLiveService extends Service {
                             if (op == 1 || op == 2) {
                                 io.github.miam1ku.mibandoplusbridge.integration.PhoneAlarmProvider.offer(op, alarmId);
                             }
+                        }
+                        if (command.getType() == 17
+                                && io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand
+                                        .SUBTYPE_ALARMS_GET == command.getSubtype()
+                                && command.hasSchedule()
+                                && command.getSchedule().hasAlarms()) {
+                            noteAlarms(command.getSchedule().getAlarms());
                         }
                         weatherSync.onCommand(command);
                         if (command.getType() == 8 && command.getSubtype() == 47 && command.hasHealth()
@@ -2892,6 +3123,86 @@ public final class BandLiveService extends Service {
         });
     }
 
+    private void deliverVoiceTranscript(String transcript) {
+        if (stopRequested || transcript == null || transcript.isBlank()) return;
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "VOICE_TRANSCRIPT chars=" + transcript.length());
+    }
+
+    /** The controller already delivered the answer over the live AIVS channel. */
+    private void deliverVoiceAnswer(io.github.miam1ku.mibandoplusbridge.voice.OpenAiVoiceClient.Answer answer) {
+        if (stopRequested || answer == null || answer.reply().isBlank()) return;
+        String body = answer.reply().trim();
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "VOICE_ANSWER chars=" + body.length());
+    }
+
+    private void deliverVoiceFailure(String failure) {
+        if (stopRequested) return;
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                "VOICE_ASSISTANT failed " + failure);
+        String body;
+        if ("VOICE_FORMAT".equals(failure)) {
+            body = "请开启“保存原始语音帧”后重新说一遍，并导出日志。";
+        } else if ("VOICE_OGG".equals(failure)) {
+            body = "语音帧需要重新封装，请导出调试日志。";
+        } else {
+            body = "语音助手需要检查：" + failure;
+        }
+        deliverVoiceNotification("手环 AI", body);
+    }
+
+    private void deliverVoiceNotification(String title, String body) {
+        showVoiceAnswerNotification(title, body);
+        try {
+            int id = (int) (System.currentTimeMillis() & 0x7fffffff);
+            var command = io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand.post(
+                    getPackageName(), title, "voice-ai-" + id, id, title, body,
+                    java.time.Instant.now(), java.time.ZoneId.systemDefault());
+            int limit = notificationPayloadLimit();
+            if (limit > 0) {
+                sendSessionCommand(io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand
+                        .fitToPayload(command, limit));
+            } else {
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                        "VOICE_ANSWER band-unavailable");
+            }
+        } catch (RuntimeException unavailable) {
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "VOICE_ANSWER band-failed " + unavailable.getClass().getSimpleName());
+        }
+    }
+
+    private void showVoiceAnswerNotification(String title, String body) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
+                    "VOICE_NOTIFICATION permission-required");
+            return;
+        }
+        String channelId = "band-voice-ai";
+        NotificationChannel channel = new NotificationChannel(channelId, "手环语音助手",
+                NotificationManager.IMPORTANCE_DEFAULT);
+        manager.createNotificationChannel(channel);
+        android.content.Intent open = new android.content.Intent(this,
+                io.github.miam1ku.mibandoplusbridge.MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        android.app.PendingIntent contentIntent = android.app.PendingIntent.getActivity(
+                this, 0, open, android.app.PendingIntent.FLAG_IMMUTABLE
+                        | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification.Builder notice = new Notification.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
+                .setContentIntent(contentIntent)
+                .setAutoCancel(true);
+        manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), notice.build());
+    }
+
     @Override public void onDestroy() {
         if (instance == this) instance = null;
         pendingManualSyncAtMs = 0;
@@ -2914,6 +3225,7 @@ public final class BandLiveService extends Service {
         requestStop();
         cancelCoalescedNotifications(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
         calls.close();
+        if (voiceAssistant != null) voiceAssistant.close();
         weatherSync.close();
         healthReplay.close();
         coordinator.execute(() -> {

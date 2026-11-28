@@ -2,6 +2,15 @@
 package io.github.miam1ku.mibandoplusbridge.data;
 
 import org.junit.Test;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
 import static org.junit.Assert.*;
 
 public final class SessionLogTest {
@@ -77,5 +86,61 @@ public final class SessionLogTest {
             from += SessionLog.START_MARK.length();
         }
         return count;
+    }
+
+    @Test public void archiveOmitsVoiceSamplesWhenCaptureIsOff() throws Exception {
+        List<String> entries = archiveEntries(List.of());
+        assertTrue(entries.contains("band-debug.txt"));
+        assertTrue(entries.contains("transport-observation.json"));
+        assertTrue(entries.contains("README.txt"));
+        for (String entry : entries) {
+            assertFalse("voice samples leaked with capture off: " + entry,
+                    entry.startsWith("voice-samples/"));
+        }
+    }
+
+    @Test public void archiveIncludesVoiceSamplesWhenCaptureIsOn() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("voice-samples");
+        try {
+            java.io.File sample = write(dir, "voice-1.raw", 32, 1_000L);
+            List<String> entries = archiveEntries(List.of(sample));
+            assertTrue(entries.contains("voice-samples/voice-1.raw"));
+        } finally {
+            for (java.io.File file : dir.toFile().listFiles()) file.delete();
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test public void readmeWarnsThatSamplesAreRealRecordings() throws Exception {
+        String text = readmeText(archiveBytes(List.of()));
+        assertTrue("len=" + text.length() + " text=" + text, text.contains("真实录音片段"));
+    }
+
+    private static List<String> archiveEntries(List<java.io.File> samples) throws Exception {
+        List<String> names = new ArrayList<>();
+        try (ZipInputStream zip = new ZipInputStream(
+                new ByteArrayInputStream(archiveBytes(samples)))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) names.add(entry.getName());
+        }
+        return names;
+    }
+
+    private static byte[] archiveBytes(List<java.io.File> samples) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        SessionLog.writeArchive(out, "trace\n".getBytes(StandardCharsets.UTF_8),
+                "{}".getBytes(StandardCharsets.UTF_8), List.of(), samples);
+        return out.toByteArray();
+    }
+
+    private static String readmeText(byte[] archive) throws Exception {
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(archive))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (!"README.txt".equals(entry.getName())) continue;
+                return new String(zip.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+        return "";
     }
 }

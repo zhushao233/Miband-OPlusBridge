@@ -70,6 +70,7 @@ dependencies {
     compileOnly 'io.github.libxposed:api:102.0.0'
     implementation project(':HiMiuix')
     implementation project(':coui-tab')
+    implementation files('libs/concentus-1.0.jar')
     implementation 'com.google.protobuf:protobuf-javalite:4.32.0'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.81'
     implementation 'org.apache.commons:commons-compress:1.27.1'

@@ -2,11 +2,13 @@
 package io.github.miam1ku.mibandoplusbridge.data;
 
 import android.content.Context;
+import io.github.miam1ku.mibandoplusbridge.BuildConfig;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Instant;
@@ -26,6 +28,7 @@ public final class SessionLog {
     private static final long MAX_BYTES = 256 * 1024;
     private static final Object LOCK = new Object();
     private static boolean started;
+    private static volatile boolean frameTraceEnabled;
 
     private SessionLog() {}
 
@@ -76,15 +79,35 @@ public final class SessionLog {
         }
     }
 
+    /** Enables frame-level diagnostics in release builds when raw voice capture is requested. */
+    public static void setFrameTraceEnabled(boolean enabled) {
+        frameTraceEnabled = enabled;
+    }
+
+    /** Frame-level diagnostics. Debug builds and the explicit capture switch keep them. */
+    public static void trace(Context context, String message) {
+        if (!BuildConfig.DEBUG && !frameTraceEnabled) return;
+        line(context, message);
+    }
+
     private static final String BUNDLE = "band-debug";
     private static final int CAPTURE_FILES = 3;
     private static final long CAPTURE_BYTES = 24L * 1024 * 1024;
+    private static final int VOICE_SAMPLE_FILES = 1;
+    private static final long VOICE_SAMPLE_BYTES = 64L * 1024;
 
     /**
      * One archive for analysis: the session trace, the checked transport profile, and the
      * newest protocol captures. The captures are the band frames the debug window recorded.
+     * Voice samples are included only while the raw-capture switch is on; otherwise the archive
+     * never contains a {@code voice-samples/} entry.
      */
     public static File export(Context context) throws IOException {
+        return export(context, sampleCaptureEnabled(context));
+    }
+
+    /** {@code includeVoiceSamples=false} must omit the {@code voice-samples/} directory entirely. */
+    public static File export(Context context, boolean includeVoiceSamples) throws IOException {
         File dir = new File(context.getCacheDir(), "debug");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("DEBUG_LOG_UNAVAILABLE");
         String stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm")
@@ -99,14 +122,13 @@ public final class SessionLog {
         File log = logFile(context);
         if (log.isFile()) text.append(new String(Files.readAllBytes(log.toPath()), StandardCharsets.UTF_8));
         byte[] trace = retain(text.toString()).getBytes(StandardCharsets.UTF_8);
-        try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(out))) {
-            put(zip, "band-debug.txt", trace);
-            put(zip, "transport-observation.json",
-                    transport(context).getBytes(StandardCharsets.UTF_8));
-            put(zip, "README.txt", readme().getBytes(StandardCharsets.UTF_8));
-            for (File capture : pickCaptures(captureFiles(context), CAPTURE_FILES, CAPTURE_BYTES)) {
-                put(zip, "captures/" + capture.getName(), capture);
-            }
+        List<File> captures = pickCaptures(captureFiles(context), CAPTURE_FILES, CAPTURE_BYTES);
+        List<File> samples = includeVoiceSamples && sampleCaptureEnabled(context)
+                ? pickCaptures(voiceSampleFiles(context), VOICE_SAMPLE_FILES, VOICE_SAMPLE_BYTES)
+                : List.of();
+        try (FileOutputStream file = new FileOutputStream(out)) {
+            writeArchive(file, trace, transport(context).getBytes(StandardCharsets.UTF_8),
+                    captures, samples);
         } catch (IOException failed) {
             out.delete();
             throw failed;
@@ -118,6 +140,48 @@ public final class SessionLog {
             }
         }
         return out;
+    }
+
+    /** Builds the archive body; kept separate so the JVM tests can assert entry names. */
+    static void writeArchive(OutputStream target, byte[] trace, byte[] transport, List<File> captures,
+                             List<File> voiceSamples) throws IOException {
+        try (ZipOutputStream zip = new ZipOutputStream(target)) {
+            put(zip, "band-debug.txt", trace);
+            put(zip, "transport-observation.json", transport);
+            put(zip, "README.txt", readme().getBytes(StandardCharsets.UTF_8));
+            for (File capture : captures) put(zip, "captures/" + capture.getName(), capture);
+            for (File sample : voiceSamples) put(zip, "voice-samples/" + sample.getName(), sample);
+        }
+    }
+
+    private static boolean sampleCaptureEnabled(Context context) {
+        try {
+            return io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                    .load(context).captureRaw();
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    /** Number and total size of the raw voice samples a debug bundle could include. */
+    public static SampleSummary voiceSampleSummary(Context context) {
+        File[] files = voiceSampleFiles(context);
+        if (files == null || files.length == 0) return new SampleSummary(0, 0);
+        int count = 0;
+        long bytes = 0;
+        for (File file : files) {
+            if (file.isFile() && file.length() > 0) {
+                count++;
+                bytes += file.length();
+            }
+        }
+        return new SampleSummary(count, bytes);
+    }
+
+    public record SampleSummary(int files, long bytes) {
+        public boolean present() {
+            return files > 0;
+        }
     }
 
     private static String transport(Context context) {
@@ -151,12 +215,19 @@ public final class SessionLog {
         return directory.listFiles((parent, name) -> name.startsWith("capture-") && name.endsWith(".jsonl"));
     }
 
+    private static File[] voiceSampleFiles(Context context) {
+        File directory = new File(context.getNoBackupFilesDir(), "voice-samples");
+        return directory.listFiles((parent, name) -> name.startsWith("voice-") && name.endsWith(".raw"));
+    }
+
     private static String readme() {
         return "miband-oplusbridge 调试包\n"
                 + "band-debug.txt：会话日志（已去除 MAC 与控制字符）\n"
                 + "transport-observation.json：最近一次连接的传输参数（SPP/GATT、鉴权分支、RFCOMM）\n"
                 + "captures/*.jsonl：协议消息采集，一行一条，payloadBase64 是原始帧；\n"
-                + "  tx/rx 是方向，capturedAtMs/elapsedRealtimeNs 是宿主时间，receivedAtMs 是模块落盘时间。\n";
+                + "  tx/rx 是方向，capturedAtMs/elapsedRealtimeNs 是宿主时间，receivedAtMs 是模块落盘时间。\n"
+                + "voice-samples/*.raw：仅在“保存原始语音帧”开启时生成，最多 64 KB，\n"
+                + "  内含真实录音片段。对外分享前请确认已获得本人同意。\n";
     }
 
     private static void put(ZipOutputStream zip, String name, byte[] content) throws IOException {
