@@ -114,6 +114,11 @@ public final class BandLiveService extends Service {
     private long pendingDestructiveUntil;
     private volatile java.util.List<io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>
             alarms = java.util.List.of();
+    /**
+     * One in-flight alarm query. The voice controller runs watch commands serially on its
+     * commandWorker, so a second query cannot overlap the first. If that serialisation ever
+     * changes, replace this slot with a queue: an overwritten future would never complete.
+     */
     private java.util.concurrent.CompletableFuture<java.util.List<
             io.github.miam1ku.mibandoplusbridge.protocol.BandScheduleCommand.Alarm>> alarmQuery;
     private volatile long sessionEpoch;
