@@ -2,12 +2,12 @@ package com.itos.coui.host
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Rect
+import android.graphics.RecordingCanvas
 import android.graphics.RenderNode
-import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.widget.FrameLayout
 import androidx.compose.foundation.Image
@@ -34,6 +34,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.itos.coui.backdrop.CouiBackdrop
+import com.itos.coui.backdrop.couiBackdropSource
 import com.itos.coui.backdrop.rememberCouiBackdrop
 import com.itos.coui.effect.LocalCouiContourGlowEnabled
 import com.itos.coui.theme.CouiTheme
@@ -62,10 +64,13 @@ class CouiTopBarView @JvmOverloads constructor(
     private var contourEnabled by mutableStateOf(true)
     private var onBackClick: Runnable? = null
     private var barGesture = false
-    private var lastCaptureAt = 0L
-    private val preDraw = ViewTreeObserver.OnPreDrawListener {
+    private var capturePosted = false
+    private var capturing = false
+    private var backdrop: CouiBackdrop? = null
+    private val captureRunnable = Runnable {
+        capturePosted = false
         captureBackdrop()
-        true
+        invalidateComposeDraw()
     }
 
     init {
@@ -83,10 +88,13 @@ class CouiTopBarView @JvmOverloads constructor(
             val backdrop = rememberCouiBackdrop(drawSource = {
                 drawIntoCanvas { canvas -> canvas.nativeCanvas.drawRenderNode(backdropNode) }
             })
+            this@CouiTopBarView.backdrop = backdrop
             CompositionLocalProvider(LocalCouiContourGlowEnabled provides contourEnabled) {
                 CouiTheme(darkTheme = dark) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize().couiBackdropSource(backdrop))
                         TopAppBar(
+                            modifier = Modifier.align(Alignment.TopCenter),
                             title = {
                                 BasicText(
                                     text = titleText,
@@ -159,14 +167,49 @@ class CouiTopBarView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        viewTreeObserver.addOnPreDrawListener(preDraw)
+        requestCapture()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        requestCapture()
     }
 
     override fun onDetachedFromWindow() {
-        val observer = viewTreeObserver
-        if (observer.isAlive) observer.removeOnPreDrawListener(preDraw)
+        removeCallbacks(captureRunnable)
+        capturePosted = false
         backdropNode.discardDisplayList()
         super.onDetachedFromWindow()
+    }
+
+    /** 在正文完成本帧绘制后重新采样，避免把本帧绘制前的旧内容喂给模糊材质。 */
+    fun requestCapture() {
+        if (capturePosted) return
+        capturePosted = true
+        postOnAnimation(captureRunnable)
+    }
+
+    /**
+     * Samples the page immediately after it has been drawn, so the material
+     * reads the same frame the user sees instead of a deferred snapshot.
+     */
+    fun captureBackdropNow() {
+        if (capturing) return
+        capturing = true
+        try {
+            captureBackdrop()
+        } finally {
+            capturing = false
+        }
+        invalidateComposeDraw()
+    }
+
+    /** Compose keeps its display list on the child view, so it must be invalidated too. */
+    private fun invalidateComposeDraw() {
+        composeView.invalidate()
+        for (index in 0 until composeView.childCount) {
+            composeView.getChildAt(index).invalidate()
+        }
     }
 
     private fun topBarHeightPx(): Int {
@@ -182,9 +225,6 @@ class CouiTopBarView @JvmOverloads constructor(
         val width = width
         val height = height
         if (width <= 0 || height <= 0) return
-        val now = SystemClock.uptimeMillis()
-        if (now - lastCaptureAt < 16L) return
-        lastCaptureAt = now
         try {
             val recording = backdropNode.beginRecording(width, height)
             try {
@@ -192,10 +232,15 @@ class CouiTopBarView @JvmOverloads constructor(
                 val sourceLocation = IntArray(2)
                 getLocationInWindow(hostLocation)
                 backdropSource.getLocationInWindow(sourceLocation)
+                val left = (sourceLocation[0] - hostLocation[0]).toFloat()
+                val top = (sourceLocation[1] - hostLocation[1]).toFloat()
+                drawSourceBackground(recording, left, top)
                 recording.save()
+                // View.draw() does not apply the view's own scroll; the parent
+                // normally does it while building the display list.
                 recording.translate(
-                    (sourceLocation[0] - hostLocation[0]).toFloat(),
-                    (sourceLocation[1] - hostLocation[1]).toFloat(),
+                    left - backdropSource.scrollX,
+                    top - backdropSource.scrollY,
                 )
                 backdropSource.draw(recording)
                 recording.restore()
@@ -203,8 +248,24 @@ class CouiTopBarView @JvmOverloads constructor(
                 backdropNode.endRecording()
             }
             backdropNode.setPosition(0, 0, width, height)
+            backdrop?.requestSourceRecord()
         } catch (unsupported: RuntimeException) {
             backdropNode.discardDisplayList()
+        }
+    }
+
+    /** Fills the area the scrolled content leaves behind before it is re-drawn. */
+    private fun drawSourceBackground(recording: RecordingCanvas, left: Float, top: Float) {
+        val background = backdropSource.background ?: return
+        val bounds = Rect(background.bounds)
+        recording.save()
+        try {
+            recording.translate(left, top)
+            background.setBounds(0, 0, backdropSource.width, backdropSource.height)
+            background.draw(recording)
+        } finally {
+            background.bounds = bounds
+            recording.restore()
         }
     }
 }

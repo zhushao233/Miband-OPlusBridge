@@ -51,7 +51,11 @@ fun rememberCouiBackdrop(
     }
 }
 
-fun Modifier.couiBackdrop(backdrop: CouiBackdrop): Modifier = then(BackdropElement(backdrop))
+fun Modifier.couiBackdrop(backdrop: CouiBackdrop): Modifier = then(BackdropElement(backdrop, true))
+
+/** 只把内容录进采样源层, 不合成到当前画布; 供 Android View 宿主喂 RenderNode。 */
+fun Modifier.couiBackdropSource(backdrop: CouiBackdrop): Modifier =
+    then(BackdropElement(backdrop, false))
 
 /** 只持有源图层和坐标, 不持有效果、组件动画或输入状态。 */
 class CouiBackdrop internal constructor(
@@ -68,6 +72,7 @@ class CouiBackdrop internal constructor(
     private var isolateWhenIdle = true
     private var activeConsumers = 0
     private val redrawSignal = mutableStateOf(Unit, neverEqualPolicy())
+    private val sourceSignal = mutableStateOf(Unit, neverEqualPolicy())
     private val sourceToTarget = Matrix()
     // 首次采样可能先于源绘制, 就绪状态必须唤醒已等待的消费者。
     private var recorded by mutableStateOf(false)
@@ -117,6 +122,8 @@ class CouiBackdrop internal constructor(
 
     /** 目标 DrawScope 原点须对应 target; 扩展采样区由调用方平移。 */
     fun draw(scope: DrawScope, target: LayoutCoordinates) {
+        // 读取失效信号，令同窗口的离屏材质层也随源内容重录，而不只是跨窗口订阅 PreDraw。
+        redrawSignal.value
         if (CouiRenderDiagnostics.enabled) sampleCount++
         parent?.draw(scope, target)
         val source = coordinates ?: return
@@ -157,6 +164,22 @@ class CouiBackdrop internal constructor(
         }
         recorded = true
         invalidate()
+    }
+
+    /** 仅录制采样源, 不把采样层合成到目标画布。 */
+    internal fun recordSource(scope: ContentDrawScope) {
+        // 宿主每次抓帧后递增信号, 让源层按需重录而不是停留在首帧快照。
+        sourceSignal.value
+        scope.apply {
+            layer.record { drawSource(this@apply) }
+        }
+        recorded = true
+        invalidate()
+    }
+
+    /** 宿主写入新的采样内容后调用, 触发源层重录。 */
+    fun requestSourceRecord() {
+        sourceSignal.value = Unit
     }
 
     internal fun invalidate() {
@@ -207,8 +230,11 @@ class CouiBackdrop internal constructor(
     }
 }
 
-private data class BackdropElement(val backdrop: CouiBackdrop) : ModifierNodeElement<BackdropNode>() {
-    override fun create() = BackdropNode(backdrop)
+private data class BackdropElement(
+    val backdrop: CouiBackdrop,
+    val composite: Boolean,
+) : ModifierNodeElement<BackdropNode>() {
+    override fun create() = BackdropNode(backdrop, composite)
 
     override fun update(node: BackdropNode) {
         if (node.backdrop === backdrop) return
@@ -225,7 +251,10 @@ private data class BackdropElement(val backdrop: CouiBackdrop) : ModifierNodeEle
     }
 }
 
-private class BackdropNode(var backdrop: CouiBackdrop) : Modifier.Node(), DrawModifierNode,
+private class BackdropNode(
+    var backdrop: CouiBackdrop,
+    private val composite: Boolean,
+) : Modifier.Node(), DrawModifierNode,
     GlobalPositionAwareModifierNode, ViewTreeObserver.OnPreDrawListener, ViewTreeObserver.OnWindowFocusChangeListener {
     private var observer: ViewTreeObserver? = null
 
@@ -260,5 +289,7 @@ private class BackdropNode(var backdrop: CouiBackdrop) : Modifier.Node(), DrawMo
         backdrop.coordinates = coordinates
     }
 
-    override fun ContentDrawScope.draw() = backdrop.recordAndDraw(this)
+    override fun ContentDrawScope.draw() {
+        if (composite) backdrop.recordAndDraw(this) else backdrop.recordSource(this)
+    }
 }

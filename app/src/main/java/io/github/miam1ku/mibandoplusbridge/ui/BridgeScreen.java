@@ -67,7 +67,7 @@ public final class BridgeScreen {
     public final LinearLayout body;
     private final AppCompatActivity activity;
     private final CouiTopBarView topBar;
-    private final NestedScrollView scroll;
+    private final CouiNestedScrollView scroll;
     private final CouiTabBarView tabBar;
     private final View tabBarContainer;
     private final MiuixFillView pageHost;
@@ -86,7 +86,7 @@ public final class BridgeScreen {
     }
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body, CouiTopBarView topBar,
-                         NestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
+                         CouiNestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
                          CouiTabBarView tabBar, View tabBarContainer) {
         this.activity = activity;
         this.body = body;
@@ -104,7 +104,7 @@ public final class BridgeScreen {
         FrameLayout root = new FrameLayout(activity);
         root.setBackgroundResource(surfaceRes(activity));
 
-        NestedScrollView scroll = new CouiNestedScrollView(activity);
+        CouiNestedScrollView scroll = new CouiNestedScrollView(activity);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
         scroll.setBackgroundResource(surfaceRes(activity));
@@ -123,6 +123,8 @@ public final class BridgeScreen {
         if (back) topBar.setOnBackClickListener(activity::finish);
         root.addView(topBar, new FrameLayout.LayoutParams(-1, -1));
         activity.setContentView(root);
+        scroll.setOnContentMovedListener(topBar::captureBackdropNow);
+        topBar.requestCapture();
 
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -145,7 +147,7 @@ public final class BridgeScreen {
         shell.setClipChildren(false);
         shell.setBackgroundResource(surfaceRes(activity));
 
-        NestedScrollView scroll = new CouiNestedScrollView(activity);
+        CouiNestedScrollView scroll = new CouiNestedScrollView(activity);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
         scroll.setBackgroundResource(surfaceRes(activity));
@@ -182,6 +184,12 @@ public final class BridgeScreen {
         shell.addView(tabBar, new FrameLayout.LayoutParams(-1, -1));
 
         activity.setContentView(shell);
+        scroll.setOnContentMovedListener(() -> {
+            topBar.captureBackdropNow();
+            tabBar.captureBackdropNow();
+        });
+        topBar.requestCapture();
+        tabBar.requestCapture();
         BridgeScreen screen = new BridgeScreen(activity, pageHost, topBar, scroll, pageHost,
                 pageFrame, tabBar, tabBar);
         screen.bottomClearance = dp(activity, TAB_BAR_CLEARANCE_DP);
@@ -251,6 +259,7 @@ public final class BridgeScreen {
         if (tabBarContainer == null) return;
         if (visible) {
             tabBarContainer.setVisibility(View.VISIBLE);
+            if (tabBar != null) tabBar.requestCapture();
         } else {
             tabBarContainer.animate().cancel();
             tabBarContainer.setVisibility(View.GONE);
@@ -355,6 +364,7 @@ public final class BridgeScreen {
             tabBarContainer.setAlpha(value);
             tabBarContainer.setTranslationY(dp(activity, 8) * (1f - value));
         }
+        sampleBars();
     }
 
     /** Restores the secondary page when the user cancels the gesture. */
@@ -535,6 +545,7 @@ public final class BridgeScreen {
                 if (token != pageAnimationToken) return;
                 pageAnimator = null;
                 completion.run();
+                sampleBarsAfterLayout();
             }
         });
         animator.start();
@@ -555,6 +566,7 @@ public final class BridgeScreen {
         resetPage(target);
         target.setVisibility(View.VISIBLE);
         visiblePage = target;
+        sampleBarsAfterLayout();
     }
 
     private void hidePage(LinearLayout page) {
@@ -581,6 +593,17 @@ public final class BridgeScreen {
             visiblePage = predictiveSource;
         }
         clearPredictivePages();
+        sampleBarsAfterLayout();
+    }
+
+    /** Re-samples the page once the new chrome has been laid out. */
+    private void sampleBarsAfterLayout() {
+        if (scroll == null) return;
+        scroll.post(this::sampleBars);
+    }
+
+    private void sampleBars() {
+        if (scroll != null) scroll.sampleContent();
     }
 
     private void clearPredictivePages() {
