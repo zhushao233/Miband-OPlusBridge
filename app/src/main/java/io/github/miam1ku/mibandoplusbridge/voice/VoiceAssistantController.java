@@ -56,6 +56,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     private final Consumer<String> onFailure;
     private final VoiceApiClient client;
     private final VoiceConversationHistory history;
+    private final java.util.function.LongSupplier clock;
     private final AivsStreamParser parser = new AivsStreamParser();
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(
             runnable -> {
@@ -117,7 +118,21 @@ public final class VoiceAssistantController implements AutoCloseable {
                              Consumer<String> onFailure,
                              VoiceApiClient client,
                              VoiceConversationHistory history) {
+        this(context, replySink, commandExecutor, weatherContextProvider, onTranscript, onAnswer,
+                onFailure, client, history, android.os.SystemClock::elapsedRealtime);
+    }
+
+    VoiceAssistantController(Context context, VoiceReplySink replySink,
+                             WatchCommandExecutor commandExecutor,
+                             WeatherContextProvider weatherContextProvider,
+                             Consumer<String> onTranscript,
+                             Consumer<OpenAiVoiceClient.Answer> onAnswer,
+                             Consumer<String> onFailure,
+                             VoiceApiClient client,
+                             VoiceConversationHistory history,
+                             java.util.function.LongSupplier clock) {
         this.context = context == null ? null : context.getApplicationContext();
+        this.clock = clock == null ? System::currentTimeMillis : clock;
         this.packetSplitter = new VoiceOpusFrames.FixedPacketSplitter(
                 message -> SessionLog.line(this.context, message));
         this.replySink = replySink;
@@ -242,7 +257,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         finalizing = false;
         speechSeen = false;
         audioCommands = 0;
-        captureStartedAt = System.currentTimeMillis();
+        captureStartedAt = clock.getAsLong();
         lastAudioAt = captureStartedAt;
         lastPartialAt = captureStartedAt;
         lastPartial = "";
@@ -255,7 +270,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     void appendAudio(byte[] data, VoiceAssistantSettings.Values settings) {
         if (data == null || data.length == 0) return;
         List<byte[]> ready;
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         boolean tooLarge = false;
         synchronized (this) {
             if (closed || !sessionActive || finalizing) return;
@@ -338,7 +353,7 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private void scheduleIdleLocked() {
         if (idleFinish != null) idleFinish.cancel(false);
-        long remaining = Math.max(0, MAX_CAPTURE_MS - (System.currentTimeMillis() - captureStartedAt));
+        long remaining = Math.max(0, MAX_CAPTURE_MS - (clock.getAsLong() - captureStartedAt));
         idleFinish = worker.schedule(this::finishFromIdle,
                 Math.min(END_SILENCE_MS, remaining), TimeUnit.MILLISECONDS);
     }

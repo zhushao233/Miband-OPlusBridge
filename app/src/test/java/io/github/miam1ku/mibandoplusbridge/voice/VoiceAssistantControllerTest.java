@@ -126,7 +126,7 @@ public final class VoiceAssistantControllerTest {
         return new VoiceAssistantController(null,
                 sent::add, executor, null,
                 ignored -> { }, ignored -> { }, failures::add,
-                client, new VoiceConversationHistory(historyFile));
+                client, new VoiceConversationHistory(historyFile), System::currentTimeMillis);
     }
 
     private static AivsStreamParser.Command start() {
