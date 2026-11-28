@@ -44,6 +44,7 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
     private long nextMetricsFrame = METRICS_FRAME_INTERVAL;
     private double rmsMin = Double.MAX_VALUE;
     private double rmsMax;
+    private int nearThresholdFrames;
     private boolean frameMismatchLogged;
 
     OpusVoiceActivityDetector(android.content.Context context, Runnable onSpeechStart,
@@ -124,6 +125,7 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
                     nextMetricsFrame = METRICS_FRAME_INTERVAL;
                     rmsMin = Double.MAX_VALUE;
                     rmsMax = 0;
+                    nearThresholdFrames = 0;
                     frameMismatchLogged = false;
                     if (packet != null) wipe(packet);
                     continue;
@@ -210,7 +212,9 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
                         + voicedMillis);
                 runCallback(onSpeechStart, "start");
             } else if (event == VoiceActivityState.Event.END) {
-                SessionLog.line(context, "VOICE_VAD end=silence");
+                SessionLog.line(context, "VOICE_VAD end=silence nearThreshold="
+                        + nearThresholdFrames + " rmsThreshold=" + Math.round(MIN_VOICE_RMS));
+                nearThresholdFrames = 0;
                 runCallback(onSpeechEnd, "end");
             }
             return true;
@@ -263,12 +267,14 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
         decodedFrames++;
         rmsMin = Math.min(rmsMin, rms);
         rmsMax = Math.max(rmsMax, rms);
+        if (Math.abs(rms - MIN_VOICE_RMS) <= MIN_VOICE_RMS * 0.2) nearThresholdFrames++;
         while (decodedFrames >= nextMetricsFrame) {
             SessionLog.line(context, "VOICE_VAD pcm frames=" + decodedFrames
                     + " rate=" + OpusPcmDecoder.SAMPLE_RATE_HZ
                     + " channels=" + OpusPcmDecoder.CHANNELS
                     + " rmsMin=" + Math.round(rmsMin)
                     + " rmsMax=" + Math.round(rmsMax)
+                    + " rmsThreshold=" + Math.round(MIN_VOICE_RMS)
                     + " decodeFailures=" + decodeFailures);
             nextMetricsFrame += METRICS_FRAME_INTERVAL;
         }
