@@ -123,7 +123,7 @@ public final class SessionLog {
         if (log.isFile()) text.append(new String(Files.readAllBytes(log.toPath()), StandardCharsets.UTF_8));
         byte[] trace = retain(text.toString()).getBytes(StandardCharsets.UTF_8);
         List<File> captures = pickCaptures(captureFiles(context), CAPTURE_FILES, CAPTURE_BYTES);
-        List<File> samples = includeVoiceSamples
+        List<File> samples = includeVoiceSamples && sampleCaptureEnabled(context)
                 ? pickCaptures(voiceSampleFiles(context), VOICE_SAMPLE_FILES, VOICE_SAMPLE_BYTES)
                 : List.of();
         try (FileOutputStream file = new FileOutputStream(out)) {
