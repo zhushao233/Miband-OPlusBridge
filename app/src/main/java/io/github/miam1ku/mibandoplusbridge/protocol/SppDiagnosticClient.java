@@ -85,6 +85,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private UnknownDataObserver unknownDataObserver;
     private Consumer<java.util.List<BandHistoryParser.Measurement>> onSleepFile;
     private volatile LiveCommandQueue liveCommands;
+    /** Diagnostic total for this SPP session; deliberately kept after close for post-mortems. */
     private int unsupportedProtobufFrames;
     private int protocolMismatchFrames;
     /**
@@ -1606,7 +1607,6 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 }
             }
         }
-        unsupportedProtobufFrames = 0;
         cancelDeviceLogReceive("MASS_RECEIVE_CANCELLED");
         if (commands != null) commands.close(new IllegalStateException("SESSION_CLOSED"));
         BluetoothSocket closing;
