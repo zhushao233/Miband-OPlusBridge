@@ -661,6 +661,8 @@ public final class BridgeScreen {
     }
 
     private static void configureEdgeToEdge(AppCompatActivity activity) {
+        // WindowInsetsHelper.initialWindowInsetsListener is not needed here: MiuixAppBar has no
+        // remaining call sites under app/src, so this screen owns its own insets handling.
         Window window = activity.getWindow();
         WindowCompat.setDecorFitsSystemWindows(window, false);
         window.setBackgroundDrawable(new ColorDrawable(ContextCompat.getColor(activity,
