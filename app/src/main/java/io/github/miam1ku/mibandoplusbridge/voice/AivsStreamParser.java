@@ -50,6 +50,13 @@ public final class AivsStreamParser {
 
     private Malformed malformed;
 
+    /**
+     * Parses one SPP message. The returned list holds only complete blocks. A malformed or
+     * truncated block is stored in a single diagnostics slot, so the caller must invoke
+     * {@link #takeMalformed()} after every feed; the next feed would overwrite it. The parser
+     * deliberately discards a truncated block instead of stitching it onto the next message,
+     * because the band emits whole AIVS blocks per SPP message.
+     */
     public List<Command> feed(byte[] chunk) {
         if (chunk == null || chunk.length == 0) return List.of();
         List<Command> commands = new ArrayList<>();
