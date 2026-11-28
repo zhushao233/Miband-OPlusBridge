@@ -1601,18 +1601,29 @@ public final class MainActivity extends AppCompatActivity {
             }
         }
         message.append("录音片段可能包含你或他人的真实说话内容，对外分享前请确认已获得本人同意。");
-        MaterialAlertDialogBuilder dialog = new MaterialAlertDialogBuilder(this)
-                .setTitle("导出调试日志")
-                .setMessage(message.toString());
         if (rawCapture) {
-            dialog.setPositiveButton("仅导出日志",
-                            (ignored, which) -> exportDebugLog(false))
-                    .setNegativeButton("包含录音片段一起导出",
-                            (ignored, which) -> exportDebugLog(true));
+            CouiConfirmDialog.show(this,
+                    "导出调试日志",
+                    message.toString(),
+                    "取消",
+                    "仅导出日志",
+                    "包含录音片段一起导出",
+                    color(R.color.accent),
+                    UiStyle.contourGlow(this),
+                    null,
+                    () -> exportDebugLog(false),
+                    () -> exportDebugLog(true));
         } else {
-            dialog.setPositiveButton("导出日志", (ignored, which) -> exportDebugLog(false));
+            CouiConfirmDialog.show(this,
+                    "导出调试日志",
+                    message.toString(),
+                    "取消",
+                    "导出日志",
+                    color(R.color.accent),
+                    UiStyle.contourGlow(this),
+                    null,
+                    () -> exportDebugLog(false));
         }
-        dialog.show();
     }
 
     private static String debugSize(long bytes) {
