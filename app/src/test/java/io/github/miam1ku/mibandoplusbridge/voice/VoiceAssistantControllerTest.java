@@ -83,14 +83,48 @@ public final class VoiceAssistantControllerTest {
         }
     }
 
+    @Test public void slowWatchCommandDoesNotBlockNextTurnTranscription() throws Exception {
+        TwoTurnClient client = new TwoTurnClient();
+        BlockingWatchExecutor watch = new BlockingWatchExecutor();
+        List<byte[]> sent = new CopyOnWriteArrayList<>();
+        List<String> failures = new CopyOnWriteArrayList<>();
+        try (VoiceAssistantController controller = controller(client, watch, sent, failures)) {
+            VoiceAssistantSettings.Values settings = settings();
+            controller.beginSession(start(), settings);
+            controller.appendAudio(audioBody(), settings);
+            controller.finishCapture("band-end", settings);
+            assertTrue(watch.started.await(WAIT_SECONDS, TimeUnit.SECONDS));
+
+            controller.beginSession(start(), settings);
+            controller.appendAudio(audioBody(), settings);
+            controller.finishCapture("band-end", settings);
+            assertTrue("second turn transcription waited for the watch command",
+                    client.secondTranscribe.await(WAIT_SECONDS, TimeUnit.SECONDS));
+
+            watch.release.countDown();
+            assertTrue(watch.finished.await(WAIT_SECONDS, TimeUnit.SECONDS));
+            controller.awaitApiIdleForTest();
+            assertTrue(failures.isEmpty());
+        } finally {
+            watch.release.countDown();
+        }
+    }
+
     private static VoiceAssistantController controller(VoiceApiClient client,
+                                                       List<byte[]> sent,
+                                                       List<String> failures) throws Exception {
+        return controller(client, null, sent, failures);
+    }
+
+    private static VoiceAssistantController controller(VoiceApiClient client,
+                                                       WatchCommandExecutor executor,
                                                        List<byte[]> sent,
                                                        List<String> failures) throws Exception {
         File historyFile = File.createTempFile("voice-history", ".json");
         historyFile.delete();
         historyFile.deleteOnExit();
         return new VoiceAssistantController(null,
-                sent::add, null, null,
+                sent::add, executor, null,
                 ignored -> { }, ignored -> { }, failures::add,
                 client, new VoiceConversationHistory(historyFile));
     }
@@ -156,6 +190,47 @@ public final class VoiceAssistantControllerTest {
         @Override public String chat(VoiceAssistantSettings.Values settings, String prompt,
                                      String extraSystemContext) {
             throw new IllegalStateException("VOICE_TEST_CHAT");
+        }
+    }
+
+    private static final class TwoTurnClient implements VoiceApiClient {
+        final AtomicInteger transcribeCalls = new AtomicInteger();
+        final CountDownLatch secondTranscribe = new CountDownLatch(1);
+
+        @Override public String transcribe(VoiceAssistantSettings.Values settings, byte[] audio) {
+            return transcribeCalls.incrementAndGet() == 1 ? "查看闹钟" : second();
+        }
+
+        private String second() {
+            secondTranscribe.countDown();
+            return "你好";
+        }
+
+        @Override public String chat(VoiceAssistantSettings.Values settings, String prompt) {
+            return "你好，有什么可以帮你？";
+        }
+
+        @Override public String chat(VoiceAssistantSettings.Values settings, String prompt,
+                                     String extraSystemContext) {
+            return chat(settings, prompt);
+        }
+    }
+
+    private static final class BlockingWatchExecutor implements WatchCommandExecutor {
+        final CountDownLatch started = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final CountDownLatch finished = new CountDownLatch(1);
+
+        @Override public String execute(WatchCommand command) throws Exception {
+            started.countDown();
+            try {
+                if (!release.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("VOICE_TEST_WATCH_RELEASE_TIMEOUT");
+                }
+                return "闹钟列表";
+            } finally {
+                finished.countDown();
+            }
         }
     }
 }

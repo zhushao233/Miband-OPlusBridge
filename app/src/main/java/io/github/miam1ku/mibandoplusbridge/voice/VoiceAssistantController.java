@@ -68,6 +68,11 @@ public final class VoiceAssistantController implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    private final ExecutorService commandWorker = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "OplusBandVoiceCmd");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
     private final VoiceOpusFrames.FixedPacketSplitter packetSplitter =
             new VoiceOpusFrames.FixedPacketSplitter();
@@ -491,12 +496,7 @@ public final class VoiceAssistantController implements AutoCloseable {
                             + " pkg=" + (app == null ? "" : app.packageName())
                             + " sent=" + sent);
                     if (sent) {
-                        try {
-                            Thread.sleep(DIALOG_FINISH_DELAY_MS);
-                        } catch (InterruptedException interrupted) {
-                            Thread.currentThread().interrupt();
-                        }
-                        send(sid, AivsInstructionCodec.finish(sid));
+                        scheduleFinish(sid);
                     }
                     if (!isCurrent(currentGeneration)) return;
                     String reply = app == null
@@ -506,22 +506,7 @@ public final class VoiceAssistantController implements AutoCloseable {
                     publishAnswer(transcript, reply, VoiceConversationHistory.Kind.WATCH);
                     return;
                 }
-                String reply;
-                try {
-                    SessionLog.line(context, "VOICE_WATCH command=" + command.kind());
-                    reply = commandExecutor == null ? "" : commandExecutor.execute(command);
-                } catch (Exception failed) {
-                    String code = failed.getMessage();
-                    if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
-                        code = failed.getClass().getSimpleName();
-                    }
-                    SessionLog.line(context, "VOICE_WATCH failed " + code);
-                    reply = "手环指令发送中断，请确认手环已连接后再试一次。";
-                }
-                if (!isCurrent(currentGeneration)) return;
-                String compact = VoiceText.compact(reply, 300);
-                if (!compact.isBlank()) sendReply(sid, compact, tts);
-                publishAnswer(transcript, compact, VoiceConversationHistory.Kind.WATCH);
+                dispatchWatchCommand(sid, tts, transcript, currentGeneration, command);
                 return;
             }
             String reply;
@@ -637,13 +622,56 @@ public final class VoiceAssistantController implements AutoCloseable {
         if (!send(sid, AivsInstructionCodec.toast(sid, text))) return false;
         if (!tts) {
             // The official app sends Toast and DialogFinish as two separate SPP messages.
-            try {
-                Thread.sleep(DIALOG_FINISH_DELAY_MS);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            }
+            return scheduleFinish(sid);
         }
         return send(sid, AivsInstructionCodec.finish(sid));
+    }
+
+    private boolean scheduleFinish(int sid) {
+        try {
+            worker.schedule(() -> send(sid, AivsInstructionCodec.finish(sid)),
+                    DIALOG_FINISH_DELAY_MS, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (RuntimeException rejected) {
+            return false;
+        }
+    }
+
+    private void dispatchWatchCommand(int sid, boolean tts, String transcript,
+                                      long currentGeneration,
+                                      WatchCommand command) {
+        try {
+            commandWorker.execute(() -> executeWatchCommand(
+                    sid, tts, transcript, currentGeneration, command));
+        } catch (RuntimeException rejected) {
+            SessionLog.line(context, "VOICE_WATCH worker-rejected");
+            if (isCurrent(currentGeneration)) {
+                sendError(sid, "手环指令发送中断，请确认手环已连接后再试一次。", tts);
+                onFailure.accept("VOICE_WATCH_WORKER_REJECTED");
+            }
+        }
+    }
+
+    private void executeWatchCommand(int sid, boolean tts, String transcript,
+                                     long currentGeneration,
+                                     WatchCommand command) {
+        if (!isCurrent(currentGeneration)) return;
+        String reply;
+        try {
+            SessionLog.line(context, "VOICE_WATCH command=" + command.kind());
+            reply = commandExecutor == null ? "" : commandExecutor.execute(command);
+        } catch (Exception failed) {
+            String code = failed.getMessage();
+            if (code == null || !code.matches("[A-Z][A-Z0-9_]{1,80}")) {
+                code = failed.getClass().getSimpleName();
+            }
+            SessionLog.line(context, "VOICE_WATCH failed " + code);
+            reply = "手环指令发送中断，请确认手环已连接后再试一次。";
+        }
+        if (!isCurrent(currentGeneration)) return;
+        String compact = VoiceText.compact(reply, 300);
+        if (!compact.isBlank()) sendReply(sid, compact, tts);
+        publishAnswer(transcript, compact, VoiceConversationHistory.Kind.WATCH);
     }
 
     private synchronized void abort(String reason) {
@@ -738,6 +766,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         parser.reset();
         worker.shutdownNow();
         apiWorker.shutdownNow();
+        commandWorker.shutdownNow();
         loggedFrameGroups.clear();
     }
 
