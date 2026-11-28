@@ -29,6 +29,7 @@ public final class OpenAiVoiceClientTest {
     private static VoiceAssistantSettings.Values settings() {
         return new VoiceAssistantSettings.Values(VoiceAssistantPreset.OTHER, true,
                 "https://example.com/v1", "", "model", "固定系统提示词",
-                "secret", false, "https://example.com/v1/audio/transcriptions", "secret");
+                "secret", false, "https://example.com/v1/audio/transcriptions", "secret",
+                VoiceAssistantSettings.KeyState.OK);
     }
 }

@@ -621,7 +621,10 @@ public final class MainActivity extends AppCompatActivity {
             var voice = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
                     .load(this);
             voiceAssistantRow.setSummary(voice.enabled()
-                    ? (voice.complete()
+                    ? (voice.keyState() == io.github.miam1ku.mibandoplusbridge.voice
+                            .VoiceAssistantSettings.KeyState.UNREADABLE
+                            ? "已开启 · 密钥已失效"
+                            : voice.complete()
                             ? voice.preset().displayName() + " · 已开启"
                             : "已开启 · 请补齐转写与对话设置")
                     : "手环小爱语音转自定义大模型");
@@ -1248,11 +1251,16 @@ public final class MainActivity extends AppCompatActivity {
         if (voiceBaseUrlInput != null) voiceBaseUrlInput.setText(voice.baseUrl());
         if (voiceApiKeyInput != null) {
             voiceApiKeyInput.setText("");
-            voiceApiKeyInput.setHint(io.github.miam1ku.mibandoplusbridge.voice
-                    .VoiceAssistantSettings.maskedApiKey(this).isBlank()
-                    ? "填写 API Key"
-                    : io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
-                            .maskedApiKey(this));
+            if (voice.keyState() == io.github.miam1ku.mibandoplusbridge.voice
+                    .VoiceAssistantSettings.KeyState.UNREADABLE) {
+                voiceApiKeyInput.setHint("密钥已失效，请重新填写");
+            } else {
+                voiceApiKeyInput.setHint(io.github.miam1ku.mibandoplusbridge.voice
+                        .VoiceAssistantSettings.maskedApiKey(this).isBlank()
+                        ? "填写 API Key"
+                        : io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                                .maskedApiKey(this));
+            }
         }
         if (voiceChatModelInput != null) voiceChatModelInput.setText(voice.chatModel());
         if (voiceSystemPromptInput != null) {

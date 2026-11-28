@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
+import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.SecureRandom;
@@ -39,18 +40,26 @@ public final class VoiceAssistantSettings {
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
     private static final int GCM_TAG_BITS = 128;
     private static final int IV_BYTES = 12;
+    /** Distinct from "" so a lost Keystore key never looks like "never configured". */
+    static final String DECRYPT_FAILED = "\u0000VOICE_KEY_UNREADABLE";
+    private static final java.util.concurrent.atomic.AtomicBoolean unreadableLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private VoiceAssistantSettings() {}
 
+    public enum KeyState { ABSENT, OK, UNREADABLE }
+
     public record Values(VoiceAssistantPreset preset, boolean enabled, String baseUrl,
                          String transcriptionModel, String chatModel, String systemPrompt,
-                         String apiKey, boolean captureRaw, String asrUrl, String asrApiKey) {
+                         String apiKey, boolean captureRaw, String asrUrl, String asrApiKey,
+                         KeyState keyState) {
         public boolean complete() {
             return enabled && configured();
         }
 
         public boolean configured() {
-            return !baseUrl.isBlank() && !chatModel.isBlank() && !apiKey.isBlank()
+            return keyState != KeyState.UNREADABLE
+                    && !baseUrl.isBlank() && !chatModel.isBlank() && !apiKey.isBlank()
                     && !asrUrl.isBlank() && !asrApiKey.isBlank()
                     && validHttpsUrl(baseUrl) && validHttpsUrl(asrUrl);
         }
@@ -61,8 +70,20 @@ public final class VoiceAssistantSettings {
         String baseUrl = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL);
         VoiceAssistantPreset preset = VoiceAssistantPreset.fromSettings(
                 prefs.getString(KEY_PRESET, ""), baseUrl);
-        String chatKey = decrypt(prefs.getString(KEY_API_KEY_CIPHERTEXT, ""));
+        String chatCiphertext = prefs.getString(KEY_API_KEY_CIPHERTEXT, "");
+        String chatKey = decrypt(chatCiphertext);
+        KeyState keyState = keyState(chatCiphertext, chatKey);
+        if (keyState == KeyState.UNREADABLE) {
+            chatKey = "";
+            if (unreadableLogged.compareAndSet(false, true)) {
+                SessionLog.line(context, "VOICE_KEY_UNREADABLE");
+            }
+        }
         String asrKey = decrypt(prefs.getString(KEY_ASR_API_KEY_CIPHERTEXT, ""));
+        if (DECRYPT_FAILED.equals(asrKey)) {
+            asrKey = "";
+            keyState = KeyState.UNREADABLE;
+        }
         if (asrKey.isBlank()) asrKey = chatKey;
         String asrUrl = prefs.getString(KEY_ASR_URL, "");
         if (asrUrl.isBlank()) asrUrl = defaultAsrUrl(preset, baseUrl);
@@ -79,7 +100,14 @@ public final class VoiceAssistantSettings {
                 chatKey,
                 prefs.getBoolean(KEY_CAPTURE_RAW, false),
                 asrUrl,
-                asrKey);
+                asrKey,
+                keyState);
+    }
+
+    /** Decides the visible key state from the stored ciphertext and the decrypt result. */
+    static KeyState keyState(String ciphertext, String decrypted) {
+        if (ciphertext == null || ciphertext.isBlank()) return KeyState.ABSENT;
+        return DECRYPT_FAILED.equals(decrypted) ? KeyState.UNREADABLE : KeyState.OK;
     }
 
     /**
@@ -103,6 +131,8 @@ public final class VoiceAssistantSettings {
         SharedPreferences prefs = prefs(context);
         String ciphertext = prefs.getString(KEY_API_KEY_CIPHERTEXT, "");
         String previousChatKey = decrypt(ciphertext);
+        boolean chatKeyUnreadable = DECRYPT_FAILED.equals(previousChatKey);
+        if (chatKeyUnreadable) previousChatKey = "";
         String effectiveChatKey = previousChatKey;
         if (replacementApiKey != null && !replacementApiKey.isBlank()) {
             effectiveChatKey = replacementApiKey.trim();
@@ -111,15 +141,27 @@ public final class VoiceAssistantSettings {
         }
         String asrCiphertext = prefs.getString(KEY_ASR_API_KEY_CIPHERTEXT, "");
         String effectiveAsrKey = decrypt(asrCiphertext);
+        boolean asrKeyUnreadable = DECRYPT_FAILED.equals(effectiveAsrKey);
+        if (asrKeyUnreadable) effectiveAsrKey = "";
         if (effectiveAsrKey.isBlank()) effectiveAsrKey = previousChatKey;
         if (effectiveAsrKey.isBlank()) effectiveAsrKey = effectiveChatKey;
+        if (enabled && chatKeyUnreadable
+                && (replacementApiKey == null || replacementApiKey.isBlank())) {
+            return false;
+        }
+        if (enabled && asrKeyUnreadable && effectiveAsrKey.isBlank()
+                && (replacementAsrApiKey == null || replacementAsrApiKey.isBlank())) {
+            return false;
+        }
         if (replacementAsrApiKey != null && !replacementAsrApiKey.isBlank()) {
             asrCiphertext = encrypt(replacementAsrApiKey.trim());
             if (asrCiphertext.isEmpty()) return false;
-        } else if (asrCiphertext.isBlank() && !effectiveAsrKey.isBlank()) {
+        } else if ((asrCiphertext.isBlank() || asrKeyUnreadable) && !effectiveAsrKey.isBlank()) {
             // Pin the fallback on first save so switching chat providers keeps the working ASR key.
             asrCiphertext = encrypt(effectiveAsrKey);
             if (asrCiphertext.isEmpty()) return false;
+        } else if (asrKeyUnreadable) {
+            asrCiphertext = "";
         }
         if (enabled && (ciphertext.isEmpty() || asrCiphertext.isEmpty())) return false;
         SharedPreferences.Editor editor = prefs.edit()
@@ -240,7 +282,7 @@ public final class VoiceAssistantSettings {
             return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
         } catch (Exception unavailable) {
             android.util.Log.w("OplusBandBridge", "VOICE_KEY_DECRYPT_FAILED");
-            return "";
+            return DECRYPT_FAILED;
         }
     }
 }

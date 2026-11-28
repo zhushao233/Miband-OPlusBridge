@@ -145,7 +145,8 @@ public final class VoiceAssistantControllerTest {
                 VoiceAssistantPreset.OPENAI, true,
                 "https://api.example.com/v1", "whisper-1", "gpt-4.1-mini",
                 "system", "test-key", false,
-                "https://api.example.com/v1/audio/transcriptions", "test-key");
+                "https://api.example.com/v1/audio/transcriptions", "test-key",
+                VoiceAssistantSettings.KeyState.OK);
     }
 
     private static class BlockingClient implements VoiceApiClient {

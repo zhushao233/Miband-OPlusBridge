@@ -2,6 +2,7 @@
 package io.github.miam1ku.mibandoplusbridge.voice;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 import org.junit.Test;
 
@@ -40,5 +41,27 @@ public final class VoiceAssistantSettingsTest {
                 " custom-asr ", VoiceAssistantPreset.OPENAI));
         assertEquals("", VoiceAssistantSettings.effectiveTranscriptionModel(
                 "", VoiceAssistantPreset.KIMI));
+    }
+
+    @Test public void aLostKeystoreKeyIsUnreadableRatherThanAbsent() {
+        assertEquals(VoiceAssistantSettings.KeyState.ABSENT,
+                VoiceAssistantSettings.keyState("", ""));
+        assertEquals(VoiceAssistantSettings.KeyState.ABSENT,
+                VoiceAssistantSettings.keyState(null, ""));
+        assertEquals(VoiceAssistantSettings.KeyState.OK,
+                VoiceAssistantSettings.keyState("ciphertext", "sk-live"));
+        assertEquals(VoiceAssistantSettings.KeyState.UNREADABLE,
+                VoiceAssistantSettings.keyState("ciphertext",
+                        VoiceAssistantSettings.DECRYPT_FAILED));
+    }
+
+    @Test public void anUnreadableKeyIsNotConfigured() {
+        var values = new VoiceAssistantSettings.Values(VoiceAssistantPreset.OPENAI, true,
+                "https://api.example.com/v1", "whisper-1", "model", "prompt",
+                "", false, "https://api.example.com/v1/audio/transcriptions", "",
+                VoiceAssistantSettings.KeyState.UNREADABLE);
+
+        assertFalse(values.configured());
+        assertFalse(values.complete());
     }
 }
