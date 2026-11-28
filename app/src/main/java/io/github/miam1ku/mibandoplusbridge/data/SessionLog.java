@@ -145,13 +145,13 @@ public final class SessionLog {
     /** Builds the archive body; kept separate so the JVM tests can assert entry names. */
     static void writeArchive(OutputStream target, byte[] trace, byte[] transport, List<File> captures,
                              List<File> voiceSamples) throws IOException {
-        ZipOutputStream zip = new ZipOutputStream(target);
-        put(zip, "band-debug.txt", trace);
-        put(zip, "transport-observation.json", transport);
-        put(zip, "README.txt", readme().getBytes(StandardCharsets.UTF_8));
-        for (File capture : captures) put(zip, "captures/" + capture.getName(), capture);
-        for (File sample : voiceSamples) put(zip, "voice-samples/" + sample.getName(), sample);
-        zip.finish();
+        try (ZipOutputStream zip = new ZipOutputStream(target)) {
+            put(zip, "band-debug.txt", trace);
+            put(zip, "transport-observation.json", transport);
+            put(zip, "README.txt", readme().getBytes(StandardCharsets.UTF_8));
+            for (File capture : captures) put(zip, "captures/" + capture.getName(), capture);
+            for (File sample : voiceSamples) put(zip, "voice-samples/" + sample.getName(), sample);
+        }
     }
 
     private static boolean sampleCaptureEnabled(Context context) {
