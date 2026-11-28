@@ -561,7 +561,7 @@ public final class MainActivity extends AppCompatActivity {
                 () -> startActivity(new Intent().setClassName(this,
                         "io.github.miam1ku.mibandoplusbridge.integration.BandDetailsInternalActivity")));
         deviceDetailRow.setSummary("已保存历史、日汇总核对");
-        deviceDetailRow.setIcon(rowIcon(R.drawable.ic_tab_device));
+        deviceDetailRow.setIcon(rowIcon(R.drawable.ic_band_top_view));
         MiuixBasicView weather = toolsPage.navRow(links, "天气同步",
                 () -> startActivity(new Intent(this, WeatherActivity.class)));
         weather.setSummary("位置天气、城市关联");
@@ -627,7 +627,7 @@ public final class MainActivity extends AppCompatActivity {
             showSecondaryPage(bindingPage, Copy.SETTINGS_BINDING, this::refreshDevice);
         });
         binding.setSummary(Copy.SETTINGS_BINDING_SUMMARY);
-        binding.setIcon(rowIcon(R.drawable.ic_tab_device));
+        binding.setIcon(rowIcon(R.drawable.ic_band_top_view));
         MiuixBasicView debug = settingsPage.navRow(advanced, Copy.SETTINGS_DEBUG, () -> {
             refreshDebugStatus();
             showSecondaryPage(debugPage, Copy.SETTINGS_DEBUG, this::refreshDevice);
