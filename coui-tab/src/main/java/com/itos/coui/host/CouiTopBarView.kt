@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,10 +42,13 @@ import com.itos.coui.effect.LocalCouiContourGlowEnabled
 import com.itos.coui.theme.CouiTheme
 import com.itos.coui.theme.LocalCouiContentColor
 import com.itos.coui.theme.LocalCouiTextStyle
+import com.itos.coui.topappbar.CouiCollapsingAppBarState
 import com.itos.coui.topappbar.CouiTopAppBarDefaults
+import com.itos.coui.topappbar.LargeTopAppBar
 import com.itos.coui.topappbar.TopAppBar
 import com.itos.coui.topappbar.TopAppBarButton
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Android View host for the COUI compact top app bar.
@@ -67,6 +71,9 @@ class CouiTopBarView @JvmOverloads constructor(
     private var capturePosted = false
     private var capturing = false
     private var backdrop: CouiBackdrop? = null
+    private var largeTitleMode by mutableStateOf(true)
+    private var collapseFraction = 0f
+    private var appBarState: CouiCollapsingAppBarState? = null
     private val captureRunnable = Runnable {
         capturePosted = false
         captureBackdrop()
@@ -89,47 +96,64 @@ class CouiTopBarView @JvmOverloads constructor(
                 drawIntoCanvas { canvas -> canvas.nativeCanvas.drawRenderNode(backdropNode) }
             })
             this@CouiTopBarView.backdrop = backdrop
+            val scrollBehavior = CouiTopAppBarDefaults.exitUntilCollapsedScrollBehavior(
+                canScroll = { backdropSource.canScrollVertically(1) },
+            )
+            this@CouiTopBarView.appBarState = scrollBehavior.state
             CompositionLocalProvider(LocalCouiContourGlowEnabled provides contourEnabled) {
                 CouiTheme(darkTheme = dark) {
                     Box(Modifier.fillMaxSize()) {
                         Box(Modifier.fillMaxSize().couiBackdropSource(backdrop))
-                        TopAppBar(
-                            modifier = Modifier.align(Alignment.TopCenter),
-                            title = {
-                                BasicText(
-                                    text = titleText,
-                                    style = LocalCouiTextStyle.current.copy(
-                                        color = LocalCouiContentColor.current,
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                        val titleContent: @Composable () -> Unit = {
+                            BasicText(
+                                text = titleText,
+                                style = LocalCouiTextStyle.current.copy(
+                                    color = LocalCouiContentColor.current,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        val navigationContent: @Composable () -> Unit = {
+                            if (backShown) {
+                                val backIcon = ImageVector.vectorResource(
+                                    R.drawable.coui_back_outlined,
                                 )
-                            },
-                            navigationIcon = {
-                                if (backShown) {
-                                    val backIcon = ImageVector.vectorResource(
-                                        R.drawable.coui_back_outlined,
+                                TopAppBarButton(
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "返回"
+                                    },
+                                    onClick = { onBackClick?.run() },
+                                ) {
+                                    Image(
+                                        painter = rememberVectorPainter(backIcon),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(22.dp),
+                                        colorFilter = ColorFilter.tint(
+                                            CouiTheme.colorScheme.onSurface,
+                                        ),
                                     )
-                                    TopAppBarButton(
-                                        modifier = Modifier.semantics {
-                                            contentDescription = "返回"
-                                        },
-                                        onClick = { onBackClick?.run() },
-                                    ) {
-                                        Image(
-                                            painter = rememberVectorPainter(backIcon),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(22.dp),
-                                            colorFilter = ColorFilter.tint(
-                                                CouiTheme.colorScheme.onSurface,
-                                            ),
-                                        )
-                                    }
                                 }
-                            },
-                            dark = dark,
-                            backdrop = backdrop,
-                        )
+                            }
+                        }
+                        if (largeTitleMode) {
+                            LargeTopAppBar(
+                                modifier = Modifier.align(Alignment.TopCenter),
+                                title = titleContent,
+                                navigationIcon = navigationContent,
+                                dark = dark,
+                                backdrop = backdrop,
+                                scrollBehavior = scrollBehavior,
+                            )
+                        } else {
+                            TopAppBar(
+                                modifier = Modifier.align(Alignment.TopCenter),
+                                title = titleContent,
+                                navigationIcon = navigationContent,
+                                dark = dark,
+                                backdrop = backdrop,
+                            )
+                        }
                     }
                 }
             }
@@ -147,6 +171,26 @@ class CouiTopBarView @JvmOverloads constructor(
     fun setBackVisible(visible: Boolean) {
         backShown = visible
     }
+
+    /**
+     * 主页面使用展开的大标题，进入二级页时切回紧凑标题。
+     * 宿主需同步更新正文档位，避免大标题压住内容。
+     */
+    fun setLargeTitle(large: Boolean) {
+        if (largeTitleMode == large) return
+        largeTitleMode = large
+        collapseFraction = 0f
+        appBarState?.setCollapsedFraction(0f)
+        requestCapture()
+    }
+
+    /** 当前模式下顶栏占用的正文高度，不含状态栏 inset。 */
+    fun contentHeightPx(): Int =
+        if (largeTitleMode) expandedHeightPx() else collapsedHeightPx()
+
+    /** 大标题从展开到收起所需的滚动距离。 */
+    fun collapseRangePx(): Int =
+        (expandedHeightPx() - collapsedHeightPx()).coerceAtLeast(0)
 
     fun setContourGlowEnabled(enabled: Boolean) {
         contourEnabled = enabled
@@ -216,8 +260,14 @@ class CouiTopBarView @JvmOverloads constructor(
         val insets = rootWindowInsets
         val systemTop = insets?.getInsets(WindowInsets.Type.systemBars())?.top ?: 0
         val cutoutTop = insets?.getInsets(WindowInsets.Type.displayCutout())?.top ?: 0
-        val content = (CouiTopAppBarDefaults.height.value * resources.displayMetrics.density)
-        return content.toInt() + max(systemTop, cutoutTop)
+        val content = if (largeTitleMode) {
+            val expanded = expandedHeightPx()
+            val collapsed = collapsedHeightPx()
+            (expanded - (expanded - collapsed) * collapseFraction).roundToInt()
+        } else {
+            collapsedHeightPx()
+        }
+        return content + max(systemTop, cutoutTop)
     }
 
     private fun captureBackdrop() {
@@ -225,6 +275,7 @@ class CouiTopBarView @JvmOverloads constructor(
         val width = width
         val height = height
         if (width <= 0 || height <= 0) return
+        syncCollapse()
         try {
             val recording = backdropNode.beginRecording(width, height)
             try {
@@ -267,5 +318,20 @@ class CouiTopBarView @JvmOverloads constructor(
             background.bounds = bounds
             recording.restore()
         }
+    }
+
+    private fun expandedHeightPx(): Int =
+        (CouiTopAppBarDefaults.expandedHeight.value * resources.displayMetrics.density).roundToInt()
+
+    private fun collapsedHeightPx(): Int =
+        (CouiTopAppBarDefaults.collapsedHeight.value * resources.displayMetrics.density).roundToInt()
+
+    private fun syncCollapse() {
+        if (!largeTitleMode) return
+        val range = (expandedHeightPx() - collapsedHeightPx()).coerceAtLeast(1)
+        val fraction = (backdropSource.scrollY.toFloat() / range).coerceIn(0f, 1f)
+        if (fraction == collapseFraction) return
+        collapseFraction = fraction
+        appBarState?.setCollapsedFraction(fraction)
     }
 }

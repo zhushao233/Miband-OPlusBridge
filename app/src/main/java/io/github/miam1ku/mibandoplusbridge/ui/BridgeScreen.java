@@ -65,6 +65,9 @@ public final class BridgeScreen {
     private enum ActionStyle { FILLED, OUTLINED, TEXT, DANGER }
 
     public final LinearLayout body;
+    private int contentInsetLeft;
+    private int contentInsetTop;
+    private int contentInsetRight;
     private final AppCompatActivity activity;
     private final CouiTopBarView topBar;
     private final CouiNestedScrollView scroll;
@@ -119,20 +122,26 @@ public final class BridgeScreen {
         CouiTopBarView topBar = new CouiTopBarView(activity, scroll);
         topBar.setTitle(title);
         topBar.setBackVisible(back);
+        topBar.setLargeTitle(!back);
         topBar.setContourGlowEnabled(UiStyle.contourGlow(activity));
         if (back) topBar.setOnBackClickListener(activity::finish);
         root.addView(topBar, new FrameLayout.LayoutParams(-1, -1));
         activity.setContentView(root);
         scroll.setOnContentMovedListener(topBar::captureBackdropNow);
         topBar.requestCapture();
+        BridgeScreen screen = new BridgeScreen(activity, body, topBar, scroll, null, null, null, null);
+        screen.applyTopBarPadding();
 
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            body.setPadding(bars.left, bars.top + dp(activity, TOP_BAR_HEIGHT_DP), bars.right,
+            screen.contentInsetLeft = bars.left;
+            screen.contentInsetTop = bars.top;
+            screen.contentInsetRight = bars.right;
+            body.setPadding(bars.left, bars.top + topBar.contentHeightPx(), bars.right,
                     Math.max(bars.bottom, navigationBarHeight(activity)) + dp(activity, 24));
             return insets;
         });
-        return new BridgeScreen(activity, body, topBar, scroll, null, null, null, null);
+        return screen;
     }
 
     /**
@@ -148,7 +157,7 @@ public final class BridgeScreen {
         shell.setBackgroundResource(surfaceRes(activity));
 
         CouiNestedScrollView scroll = new CouiNestedScrollView(activity);
-        scroll.setFillViewport(true);
+        scroll.setFillViewport(false);
         scroll.setClipToPadding(false);
         scroll.setBackgroundResource(surfaceRes(activity));
 
@@ -166,6 +175,7 @@ public final class BridgeScreen {
         CouiTopBarView topBar = new CouiTopBarView(activity, scroll);
         topBar.setTitle(title);
         topBar.setBackVisible(false);
+        topBar.setLargeTitle(true);
         topBar.setContourGlowEnabled(UiStyle.contourGlow(activity));
         shell.addView(topBar, new FrameLayout.LayoutParams(-1, -1));
 
@@ -193,9 +203,14 @@ public final class BridgeScreen {
         BridgeScreen screen = new BridgeScreen(activity, pageHost, topBar, scroll, pageHost,
                 pageFrame, tabBar, tabBar);
         screen.bottomClearance = dp(activity, TAB_BAR_CLEARANCE_DP);
+        scroll.setMinimumContentOverflow(topBar.collapseRangePx());
+        screen.applyTopBarPadding();
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            pageHost.setPadding(bars.left, bars.top + dp(activity, TOP_BAR_HEIGHT_DP),
+            screen.contentInsetLeft = bars.left;
+            screen.contentInsetTop = bars.top;
+            screen.contentInsetRight = bars.right;
+            pageHost.setPadding(bars.left, bars.top + topBar.contentHeightPx(),
                     bars.right, 0);
             screen.bottomClearance = dp(activity, TAB_BAR_CLEARANCE_DP) + bars.bottom;
             for (LinearLayout page : screen.pages) {
@@ -229,6 +244,11 @@ public final class BridgeScreen {
         if (topBar == null) return;
         topBar.setTitle(title);
         topBar.setBackVisible(back);
+        topBar.setLargeTitle(!back);
+        if (scroll != null) {
+            scroll.setMinimumContentOverflow(back ? 0 : topBar.collapseRangePx());
+        }
+        applyTopBarPadding();
         if (back) {
             topBar.setOnBackClickListener(() -> {
                 if (onBack != null) onBack.run();
@@ -273,7 +293,9 @@ public final class BridgeScreen {
     }
 
     public void scrollToTop() {
-        if (scroll != null) scroll.scrollTo(0, 0);
+        if (scroll == null) return;
+        scroll.clearFlingImpulse();
+        scroll.scrollTo(0, 0);
     }
 
     /** Swaps the visible page with one shared motion language for tabs and drill-down pages. */
@@ -604,6 +626,13 @@ public final class BridgeScreen {
 
     private void sampleBars() {
         if (scroll != null) scroll.sampleContent();
+    }
+
+    /** Keeps the page content below the current top bar mode and window insets. */
+    private void applyTopBarPadding() {
+        if (body == null || topBar == null) return;
+        body.setPadding(contentInsetLeft, contentInsetTop + topBar.contentHeightPx(),
+                contentInsetRight, body.getPaddingBottom());
     }
 
     private void clearPredictivePages() {

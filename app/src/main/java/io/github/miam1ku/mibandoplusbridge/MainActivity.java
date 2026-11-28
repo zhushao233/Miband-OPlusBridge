@@ -312,11 +312,11 @@ public final class MainActivity extends AppCompatActivity {
 
     private void showSecondaryPage(BridgeScreen page, String title, Runnable onBack) {
         secondaryPage = true;
-        screen.showPage(page.body, PageTransition.FORWARD, true);
         screen.setPageChrome(title, true, () -> {
             showPrimaryTab(currentTabId, true, PageTransition.BACK);
             if (onBack != null) onBack.run();
         });
+        screen.showPage(page.body, PageTransition.FORWARD, true);
         screen.setTabBarVisible(false);
         screen.scrollToTop();
         if (backCallback != null) backCallback.setEnabled(true);

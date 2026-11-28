@@ -67,6 +67,22 @@ class CouiCollapsingAppBarState internal constructor(rangePx: Float, initialFrac
     val contentTranslationY: Float get() = offsetPx - contentOffsetPx
 
     /**
+     * Android View 宿主按正文滚动位置直接同步折叠位置。
+     * fraction 为 0 时展开，为 1 时收起；宿主已按阻尼滚动，不再叠加弹簧。
+     */
+    fun setCollapsedFraction(fraction: Float) {
+        val target = fraction.coerceIn(0f, 1f) * rangePx
+        if (target == offsetPx) return
+        snap?.cancel()
+        snap = null
+        contentSnap?.cancel()
+        contentSnap = null
+        logicalOffset = target
+        offsetPx = target
+        contentOffsetPx = target
+    }
+
+    /**
      * 用逻辑滚动位置修正内容的顶部留白；底部安全区及滚动视口保持不动。
      * 将结果用于滚动内容的 padding，并消费 Scaffold 原始 padding；不能再平移整个视口。
      */
