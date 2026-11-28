@@ -2,6 +2,8 @@
 package io.github.miam1ku.mibandoplusbridge.voice;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -131,6 +133,117 @@ public final class VoiceOpusFramesTest {
         assertEquals(4, countPages(ogg));
         assertEquals(480L, granuleOfPage(ogg, 2));
         assertEquals(960L, granuleOfPage(ogg, 3));
+    }
+
+    @Test public void oggCrcMatchesTheStandardOggPolynomial() {
+        assertEquals(0, VoiceOpusFrames.oggCrc(new byte[0]));
+        assertEquals(0x5fb0a94f,
+                VoiceOpusFrames.oggCrc(new byte[] {'O', 'g', 'g', 'S'}));
+    }
+
+    @Test public void everyWrittenPageCarriesAMatchingCrc() {
+        byte[] ogg = VoiceOpusFrames.toOggOpus(List.of(
+                new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}));
+        for (Page page : pages(ogg)) {
+            int stored = readIntLE(page.bytes, 22);
+            byte[] zeroed = page.bytes.clone();
+            Arrays.fill(zeroed, 22, 26, (byte) 0);
+            assertEquals("page " + page.sequence, stored, VoiceOpusFrames.oggCrc(zeroed));
+        }
+    }
+
+    @Test public void pageHeadersCarryBosNormalAndEosFlags() {
+        byte[] ogg = VoiceOpusFrames.toOggOpus(List.of(
+                new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}, new byte[] {0x08, 0x7a}));
+        List<Page> pages = pages(ogg);
+
+        assertEquals(5, pages.size());
+        assertEquals(2, pages.get(0).headerType);
+        assertEquals(0, pages.get(1).headerType);
+        assertEquals(0, pages.get(2).headerType);
+        assertEquals(0, pages.get(3).headerType);
+        assertEquals(4, pages.get(4).headerType);
+    }
+
+    @Test public void granulesAndSequenceNumbersAdvanceMonotonically() {
+        byte[] ogg = VoiceOpusFrames.toOggOpus(List.of(
+                new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}, new byte[] {0x08, 0x7a}));
+        List<Page> pages = pages(ogg);
+
+        for (int index = 0; index < pages.size(); index++) {
+            Page page = pages.get(index);
+            assertEquals(0, page.bytes[4] & 0xff);
+            assertEquals(index, page.sequence);
+            if (index >= 2) {
+                assertEquals("page " + index, (index - 1) * 960L, page.granule);
+                if (index > 2) assertTrue(page.granule > pages.get(index - 1).granule);
+            }
+        }
+    }
+
+    @Test public void audioPagesCarryThePacketsVerbatim() {
+        List<byte[]> packets = List.of(
+                new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}, new byte[] {0x08, 0x7a});
+        List<Page> pages = pages(VoiceOpusFrames.toOggOpus(packets));
+
+        assertEquals(packets.size(), pages.size() - 2);
+        for (int index = 0; index < packets.size(); index++) {
+            assertArrayEquals(packets.get(index), payload(pages.get(index + 2)));
+        }
+    }
+
+    private static final class Page {
+        final int headerType;
+        final long granule;
+        final int sequence;
+        final byte[] bytes;
+
+        Page(int headerType, long granule, int sequence, byte[] bytes) {
+            this.headerType = headerType;
+            this.granule = granule;
+            this.sequence = sequence;
+            this.bytes = bytes;
+        }
+    }
+
+    private static List<Page> pages(byte[] ogg) {
+        List<Page> pages = new ArrayList<>();
+        int offset = 0;
+        while (offset + 27 <= ogg.length) {
+            assertEquals('O', ogg[offset]);
+            assertEquals('g', ogg[offset + 1]);
+            assertEquals('g', ogg[offset + 2]);
+            assertEquals('S', ogg[offset + 3]);
+            int segments = ogg[offset + 26] & 0xff;
+            int payload = 0;
+            for (int index = 0; index < segments; index++) {
+                payload += ogg[offset + 27 + index] & 0xff;
+            }
+            int length = 27 + segments + payload;
+            pages.add(new Page(ogg[offset + 5] & 0xff,
+                    readIntLE(ogg, offset + 6) & 0xffffffffL,
+                    readIntLE(ogg, offset + 18),
+                    Arrays.copyOfRange(ogg, offset, offset + length)));
+            offset += length;
+        }
+        assertEquals(ogg.length, offset);
+        return pages;
+    }
+
+    private static byte[] payload(Page page) {
+        int segments = page.bytes[26] & 0xff;
+        int length = 0;
+        for (int index = 0; index < segments; index++) {
+            length += page.bytes[27 + index] & 0xff;
+        }
+        return Arrays.copyOfRange(page.bytes, 27 + segments, 27 + segments + length);
+    }
+
+    private static int readIntLE(byte[] bytes, int offset) {
+        return (bytes[offset] & 0xff)
+                | (bytes[offset + 1] & 0xff) << 8
+                | (bytes[offset + 2] & 0xff) << 16
+                | (bytes[offset + 3] & 0xff) << 24;
     }
 
     private static long granuleOfPage(byte[] ogg, int pageIndex) {

@@ -195,7 +195,7 @@ public final class VoiceOpusFrames {
         out.writeBytes(page);
     }
 
-    private static int oggCrc(byte[] data) {
+    static int oggCrc(byte[] data) {
         int crc = 0;
         for (byte value : data) {
             crc ^= (value & 0xff) << 24;
