@@ -83,6 +83,8 @@ public final class BridgeScreen {
     private boolean predictiveBack;
     private LinearLayout predictiveSource;
     private LinearLayout predictiveTarget;
+    private float lastPredictiveSampleProgress = -1f;
+    private int predictiveSampleFrames;
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body) {
         this(activity, body, null, null, null, null, null, null);
@@ -249,6 +251,7 @@ public final class BridgeScreen {
             scroll.setMinimumContentOverflow(back ? 0 : topBar.collapseRangePx());
         }
         applyTopBarPadding();
+        if (scroll != null) scroll.markContentDirty();
         if (back) {
             topBar.setOnBackClickListener(() -> {
                 if (onBack != null) onBack.run();
@@ -353,6 +356,8 @@ public final class BridgeScreen {
         predictiveSource = visiblePage;
         predictiveTarget = target;
         predictiveBack = true;
+        lastPredictiveSampleProgress = -1f;
+        predictiveSampleFrames = 0;
         for (LinearLayout page : pages) {
             if (page != predictiveSource && page != predictiveTarget) hidePage(page);
         }
@@ -386,7 +391,14 @@ public final class BridgeScreen {
             tabBarContainer.setAlpha(value);
             tabBarContainer.setTranslationY(dp(activity, 8) * (1f - value));
         }
-        sampleBars();
+        predictiveSampleFrames++;
+        if (lastPredictiveSampleProgress < 0f
+                || Math.abs(value - lastPredictiveSampleProgress) >= 0.02f
+                || predictiveSampleFrames >= 3) {
+            lastPredictiveSampleProgress = value;
+            predictiveSampleFrames = 0;
+            sampleBars();
+        }
     }
 
     /** Restores the secondary page when the user cancels the gesture. */
@@ -562,10 +574,12 @@ public final class BridgeScreen {
     private void runPageAnimation(AnimatorSet animator, Runnable completion) {
         int token = ++pageAnimationToken;
         pageAnimator = animator;
+        if (scroll != null) scroll.setAnimationSampling(true);
         animator.addListener(new AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(Animator animation) {
                 if (token != pageAnimationToken) return;
                 pageAnimator = null;
+                if (scroll != null) scroll.setAnimationSampling(false);
                 completion.run();
                 sampleBarsAfterLayout();
             }
@@ -579,6 +593,7 @@ public final class BridgeScreen {
             pageAnimator.cancel();
             pageAnimator = null;
         }
+        if (scroll != null) scroll.setAnimationSampling(false);
     }
 
     private void completePage(LinearLayout target) {
@@ -621,6 +636,7 @@ public final class BridgeScreen {
     /** Re-samples the page once the new chrome has been laid out. */
     private void sampleBarsAfterLayout() {
         if (scroll == null) return;
+        scroll.markContentDirty();
         scroll.post(this::sampleBars);
     }
 

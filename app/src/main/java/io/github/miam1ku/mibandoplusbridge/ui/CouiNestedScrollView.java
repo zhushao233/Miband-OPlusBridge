@@ -24,6 +24,9 @@ public final class CouiNestedScrollView extends NestedScrollView {
     private boolean edgeFeedbackSent;
     private Runnable onContentMoved;
     private boolean contentSamplesRunning;
+    private boolean contentDirty = true;
+    private boolean animationSampling;
+    private long lastSampleFrame = Long.MIN_VALUE;
     private float lastTouchY;
     private long gestureDownTime;
     private float gestureDownY;
@@ -59,6 +62,7 @@ public final class CouiNestedScrollView extends NestedScrollView {
     public void setMinimumContentOverflow(int px) {
         minContentOverflow = Math.max(0, px);
         updateChildMinimumHeight();
+        contentDirty = true;
     }
 
     /** Drops a pending edge impulse before an external scroll reset. */
@@ -69,21 +73,37 @@ public final class CouiNestedScrollView extends NestedScrollView {
     @Override
     protected void dispatchDraw(Canvas canvas) {
         super.dispatchDraw(canvas);
-        sampleContent();
+        if (contentDirty || animationSampling) sampleContent();
     }
 
     /**
-     * Runs the sample callback once, suppressing the nested dispatchDraw calls
-     * that the callback itself performs while re-recording the page content.
+     * Runs the sample callback at most once per frame. Re-entrant dispatchDraw calls made
+     * while the callback records the page are suppressed, and repeated host calls in the
+     * same frame are dropped by the frame guard.
      */
     public void sampleContent() {
         if (contentSamplesRunning || onContentMoved == null) return;
+        long frameTime = getDrawingTime();
+        if (frameTime == lastSampleFrame) return;
+        lastSampleFrame = frameTime;
+        contentDirty = false;
         contentSamplesRunning = true;
         try {
             onContentMoved.run();
         } finally {
             contentSamplesRunning = false;
         }
+    }
+
+    /** Marks the page as changed so the next draw refreshes the blur samples. */
+    public void markContentDirty() {
+        contentDirty = true;
+    }
+
+    /** Keeps sampling every frame while a host page animation moves the content. */
+    public void setAnimationSampling(boolean enabled) {
+        animationSampling = enabled;
+        if (enabled) contentDirty = true;
     }
 
     @Override
@@ -175,12 +195,14 @@ public final class CouiNestedScrollView extends NestedScrollView {
 
     private void setOverscroll(float value) {
         overscroll = value;
+        contentDirty = true;
         View content = getChildAt(0);
         if (content != null) content.setTranslationY(value);
     }
 
     @Override
     public void fling(int velocityY) {
+        contentDirty = true;
         if (impactAnimator != null || overscroll != 0f) {
             pendingFlingVelocity = 0f;
         } else if (velocityY > 0 && !canScrollVertically(1)) {
@@ -198,6 +220,7 @@ public final class CouiNestedScrollView extends NestedScrollView {
     @Override
     protected void onScrollChanged(int l, int t, int oldl, int oldt) {
         super.onScrollChanged(l, t, oldl, oldt);
+        contentDirty = true;
         float velocity = pendingFlingVelocity;
         if (velocity > 0f && !canScrollVertically(1)) {
             pendingFlingVelocity = 0f;
@@ -281,6 +304,7 @@ public final class CouiNestedScrollView extends NestedScrollView {
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         updateChildMinimumHeight();
+        contentDirty = true;
     }
 
     @Override
