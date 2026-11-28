@@ -66,8 +66,9 @@ public final class BridgeScreen {
 
     public final LinearLayout body;
     private int contentInsetLeft;
-    private int contentInsetTop;
+    private int contentInsetTop = -1;
     private int contentInsetRight;
+    private int contentInsetBottom;
     private final AppCompatActivity activity;
     private final CouiTopBarView topBar;
     private final CouiNestedScrollView scroll;
@@ -139,8 +140,9 @@ public final class BridgeScreen {
             screen.contentInsetLeft = bars.left;
             screen.contentInsetTop = bars.top;
             screen.contentInsetRight = bars.right;
-            body.setPadding(bars.left, bars.top + topBar.contentHeightPx(), bars.right,
-                    Math.max(bars.bottom, navigationBarHeight(activity)) + dp(activity, 24));
+            screen.contentInsetBottom = Math.max(bars.bottom, navigationBarHeight(activity))
+                    + dp(activity, 24);
+            screen.applyTopBarPadding();
             return insets;
         });
         return screen;
@@ -212,8 +214,8 @@ public final class BridgeScreen {
             screen.contentInsetLeft = bars.left;
             screen.contentInsetTop = bars.top;
             screen.contentInsetRight = bars.right;
-            pageHost.setPadding(bars.left, bars.top + topBar.contentHeightPx(),
-                    bars.right, 0);
+            screen.contentInsetBottom = 0;
+            screen.applyTopBarPadding();
             screen.bottomClearance = dp(activity, TAB_BAR_CLEARANCE_DP) + bars.bottom;
             for (LinearLayout page : screen.pages) {
                 page.setPadding(0, 0, 0, screen.bottomClearance);
@@ -646,9 +648,11 @@ public final class BridgeScreen {
 
     /** Keeps the page content below the current top bar mode and window insets. */
     private void applyTopBarPadding() {
-        if (body == null || topBar == null) return;
+        // Until the first insets arrive, keep the initial TOP_BAR_HEIGHT_DP fallback instead
+        // of overwriting the status-bar height with zero.
+        if (body == null || topBar == null || contentInsetTop < 0) return;
         body.setPadding(contentInsetLeft, contentInsetTop + topBar.contentHeightPx(),
-                contentInsetRight, body.getPaddingBottom());
+                contentInsetRight, contentInsetBottom);
     }
 
     private void clearPredictivePages() {
