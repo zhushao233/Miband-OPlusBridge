@@ -47,7 +47,6 @@ import com.itos.coui.topappbar.CouiTopAppBarDefaults
 import com.itos.coui.topappbar.LargeTopAppBar
 import com.itos.coui.topappbar.TopAppBar
 import com.itos.coui.topappbar.TopAppBarButton
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
@@ -196,9 +195,13 @@ class CouiTopBarView @JvmOverloads constructor(
         contourEnabled = enabled
     }
 
+    /**
+     * 顶栏只拦截返回按钮的点击，其余区域把触摸交回正文，
+     * 否则展开的大标题会把页面滑动手势吃掉。
+     */
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> barGesture = event.y <= topBarHeightPx()
+            MotionEvent.ACTION_DOWN -> barGesture = isBackButtonTouch(event.x, event.y)
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 val handled = barGesture && super.dispatchTouchEvent(event)
                 barGesture = false
@@ -207,6 +210,15 @@ class CouiTopBarView @JvmOverloads constructor(
         }
         if (!barGesture) return false
         return super.dispatchTouchEvent(event)
+    }
+
+    private fun isBackButtonTouch(x: Float, y: Float): Boolean {
+        if (!backShown) return false
+        val bars = rootWindowInsets?.getInsets(WindowInsets.Type.systemBars())
+        val left = (bars?.left ?: 0).toFloat()
+        val top = (bars?.top ?: 0).toFloat()
+        val size = 64f * resources.displayMetrics.density
+        return x >= left && x <= left + size && y >= top && y <= top + size
     }
 
     override fun onAttachedToWindow() {
@@ -254,20 +266,6 @@ class CouiTopBarView @JvmOverloads constructor(
         for (index in 0 until composeView.childCount) {
             composeView.getChildAt(index).invalidate()
         }
-    }
-
-    private fun topBarHeightPx(): Int {
-        val insets = rootWindowInsets
-        val systemTop = insets?.getInsets(WindowInsets.Type.systemBars())?.top ?: 0
-        val cutoutTop = insets?.getInsets(WindowInsets.Type.displayCutout())?.top ?: 0
-        val content = if (largeTitleMode) {
-            val expanded = expandedHeightPx()
-            val collapsed = collapsedHeightPx()
-            (expanded - (expanded - collapsed) * collapseFraction).roundToInt()
-        } else {
-            collapsedHeightPx()
-        }
-        return content + max(systemTop, cutoutTop)
     }
 
     private fun captureBackdrop() {
