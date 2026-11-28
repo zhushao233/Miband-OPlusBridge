@@ -22,6 +22,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+      - name: Verify bundled jars
+        run: cd app/libs && sha256sum -c README.sha256
       - name: Install Android SDK packages
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
