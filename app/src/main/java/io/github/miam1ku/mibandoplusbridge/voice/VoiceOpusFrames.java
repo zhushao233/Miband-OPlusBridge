@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Length-prefixed Opus extraction and a small Ogg Opus container writer.
@@ -19,7 +20,8 @@ public final class VoiceOpusFrames {
     public static final int VOICE_OPUS_PACKET_BYTES = 80;
     private static final int OPUS_TIMELINE_RATE = 48_000;
     private static final int FRAME_MILLIS = 20;
-    private static final int FRAME_GRANULE = OPUS_TIMELINE_RATE * FRAME_MILLIS / 1_000;
+    /** Samples per 20 ms frame on the 48 kHz Opus timeline. */
+    public static final int FRAME_GRANULE = OPUS_TIMELINE_RATE * FRAME_MILLIS / 1_000;
     private static final int OGG_VERSION = 0;
     private static final int OGG_BOS = 2;
     private static final int OGG_EOS = 4;
@@ -50,7 +52,16 @@ public final class VoiceOpusFrames {
      */
     public static final class FixedPacketSplitter {
         private final byte[] pending = new byte[VOICE_OPUS_PACKET_BYTES];
+        private final Consumer<String> invalidSink;
         private int pendingBytes;
+
+        public FixedPacketSplitter() {
+            this(ignored -> { });
+        }
+
+        public FixedPacketSplitter(Consumer<String> invalidSink) {
+            this.invalidSink = invalidSink == null ? ignored -> { } : invalidSink;
+        }
 
         public List<byte[]> accept(byte[] block) {
             if (block == null || block.length == 0) return List.of();
@@ -64,13 +75,13 @@ public final class VoiceOpusFrames {
                 pendingBytes += copied;
                 offset += copied;
                 if (pendingBytes == VOICE_OPUS_PACKET_BYTES) {
-                    packets.add(pending.clone());
+                    addIfPlausible(packets, pending.clone());
                     Arrays.fill(pending, (byte) 0);
                     pendingBytes = 0;
                 }
             }
             while (block.length - offset >= VOICE_OPUS_PACKET_BYTES) {
-                packets.add(Arrays.copyOfRange(block, offset,
+                addIfPlausible(packets, Arrays.copyOfRange(block, offset,
                         offset + VOICE_OPUS_PACKET_BYTES));
                 offset += VOICE_OPUS_PACKET_BYTES;
             }
@@ -79,6 +90,15 @@ public final class VoiceOpusFrames {
                 System.arraycopy(block, offset, pending, 0, pendingBytes);
             }
             return packets;
+        }
+
+        private void addIfPlausible(List<byte[]> packets, byte[] packet) {
+            if (plausibleOpusPacket(packet)) {
+                packets.add(packet);
+                return;
+            }
+            invalidSink.accept("VOICE_PACKET_INVALID bytes=" + packet.length
+                    + " toc=" + String.format(java.util.Locale.ROOT, "%02x", packet[0] & 0xff));
         }
 
         public byte[] takeRemainder() {
@@ -95,6 +115,16 @@ public final class VoiceOpusFrames {
     }
 
     public static byte[] toOggOpus(List<byte[]> packets) {
+        return toOggOpus(packets, null);
+    }
+
+    /**
+     * Builds an Ogg Opus stream. {@code samplesPerPacket} carries the decoder's real output for
+     * each packet; when it is null or shorter than the packet list, 960 samples (20 ms at
+     * 48 kHz) is assumed. That fallback is a degenerate assumption for the current 80-byte
+     * firmware, not a verified property of other firmwares.
+     */
+    public static byte[] toOggOpus(List<byte[]> packets, int[] samplesPerPacket) {
         if (packets == null || packets.isEmpty()) {
             throw new IllegalArgumentException("OPUS_PACKETS_REQUIRED");
         }
@@ -106,7 +136,9 @@ public final class VoiceOpusFrames {
         writePage(ogg, opusTags(), 0L, serial, sequence++, 0);
         long granule = 0;
         for (int index = 0; index < packets.size(); index++) {
-            granule += FRAME_GRANULE;
+            int samples = samplesPerPacket != null && index < samplesPerPacket.length
+                    ? Math.max(0, samplesPerPacket[index]) : FRAME_GRANULE;
+            granule += samples;
             int headerType = index + 1 == packets.size() ? OGG_EOS : 0;
             writePage(ogg, packets.get(index), granule, serial, sequence++, headerType);
         }

@@ -44,6 +44,7 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
     private long nextMetricsFrame = METRICS_FRAME_INTERVAL;
     private double rmsMin = Double.MAX_VALUE;
     private double rmsMax;
+    private boolean frameMismatchLogged;
 
     OpusVoiceActivityDetector(android.content.Context context, Runnable onSpeechStart,
                               Runnable onSpeechEnd, Consumer<Boolean> onAvailability) {
@@ -123,6 +124,7 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
                     nextMetricsFrame = METRICS_FRAME_INTERVAL;
                     rmsMin = Double.MAX_VALUE;
                     rmsMax = 0;
+                    frameMismatchLogged = false;
                     if (packet != null) wipe(packet);
                     continue;
                 }
@@ -190,6 +192,7 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
         try {
             int samples = decoder.decode(packet, pcm);
             if (samples <= 0) return true;
+            checkFrameLength(samples);
             consecutiveDecodeFailures = 0;
             double rms = rms(pcm, samples);
             int durationMillis = Math.max(1,
@@ -224,6 +227,16 @@ final class OpusVoiceActivityDetector implements AutoCloseable {
                     + consecutiveDecodeFailures + " total=" + decodeFailures);
             return false;
         }
+    }
+
+    /** The firmware is assumed to send 20 ms frames; a different length silently stretches time. */
+    private void checkFrameLength(int samples) {
+        if (frameMismatchLogged) return;
+        int tolerance = Math.max(1, VoiceOpusFrames.FRAME_GRANULE / 20);
+        if (Math.abs(samples - VoiceOpusFrames.FRAME_GRANULE) <= tolerance) return;
+        frameMismatchLogged = true;
+        SessionLog.line(context, "VOICE_FRAME_MISMATCH samples=" + samples
+                + " expected=" + VoiceOpusFrames.FRAME_GRANULE);
     }
 
     private void runCallback(Runnable callback, String label) {

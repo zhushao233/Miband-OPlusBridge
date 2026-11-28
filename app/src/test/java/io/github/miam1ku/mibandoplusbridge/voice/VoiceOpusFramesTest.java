@@ -74,6 +74,41 @@ public final class VoiceOpusFramesTest {
         assertTrue(VoiceOpusFrames.extract(new byte[] {1, 2, 3, 4, 5}).isEmpty());
     }
 
+    @Test public void splitterSkipsAnInvalidPacketAndKeepsTheNextOneAligned() {
+        java.util.List<String> rejected = new java.util.ArrayList<>();
+        VoiceOpusFrames.FixedPacketSplitter splitter =
+                new VoiceOpusFrames.FixedPacketSplitter(rejected::add);
+        byte[] block = hex(CAPTURED_AUDIO_BODY);
+        block[0] = 0x03;
+        block[1] = 0x3f;
+
+        List<byte[]> packets = splitter.accept(block);
+
+        assertEquals(4, packets.size());
+        assertEquals(1, rejected.size());
+        assertTrue(rejected.get(0).startsWith("VOICE_PACKET_INVALID"));
+        assertEquals(0x4b, packets.get(0)[0] & 0xff);
+    }
+
+    @Test public void splitterJoinsThirtyAndFiftyByteChunksIntoOnePacket() {
+        byte[] body = hex(CAPTURED_AUDIO_BODY);
+        VoiceOpusFrames.FixedPacketSplitter splitter =
+                new VoiceOpusFrames.FixedPacketSplitter();
+
+        assertTrue(splitter.accept(java.util.Arrays.copyOfRange(body, 0, 30)).isEmpty());
+        List<byte[]> packets = splitter.accept(java.util.Arrays.copyOfRange(body, 30, 80));
+
+        assertEquals(1, packets.size());
+        assertArrayEquals(java.util.Arrays.copyOfRange(body, 0, 80), packets.get(0));
+    }
+
+    @Test public void rejectsATocWhoseFrameCountExceedsTheSpecifiedLimit() {
+        byte[] packet = new byte[VoiceOpusFrames.VOICE_OPUS_PACKET_BYTES];
+        packet[0] = 0x03;
+        packet[1] = 0x3f;
+        assertFalse(VoiceOpusFrames.plausibleOpusPacket(packet));
+    }
+
     @Test public void buildsOggOpusPagesWithCorrectTimeline() {
         byte[] ogg = VoiceOpusFrames.toOggOpus(List.of(
                 new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}));
@@ -86,6 +121,31 @@ public final class VoiceOpusFramesTest {
         assertFalse(indexOf(ogg, "OpusHead") < 0);
         assertFalse(indexOf(ogg, "OpusTags") < 0);
         assertEquals(4, countPages(ogg));
+    }
+
+    @Test public void perPacketSamplesDriveTheGranuleTimeline() {
+        byte[] ogg = VoiceOpusFrames.toOggOpus(
+                List.of(new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}),
+                new int[] {480, 480});
+
+        assertEquals(4, countPages(ogg));
+        assertEquals(480L, granuleOfPage(ogg, 2));
+        assertEquals(960L, granuleOfPage(ogg, 3));
+    }
+
+    private static long granuleOfPage(byte[] ogg, int pageIndex) {
+        int page = 0;
+        for (int i = 0; i + 3 < ogg.length; i++) {
+            if (ogg[i] != 'O' || ogg[i + 1] != 'g' || ogg[i + 2] != 'g'
+                    || ogg[i + 3] != 'S') continue;
+            if (page++ != pageIndex) continue;
+            long value = 0;
+            for (int b = 0; b < 8; b++) {
+                value |= (long) (ogg[i + 6 + b] & 0xff) << (b * 8);
+            }
+            return value;
+        }
+        return -1;
     }
 
     private static int countPages(byte[] bytes) {

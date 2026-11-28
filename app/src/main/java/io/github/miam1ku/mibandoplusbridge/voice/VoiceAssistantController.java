@@ -74,8 +74,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         return thread;
     });
     private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
-    private final VoiceOpusFrames.FixedPacketSplitter packetSplitter =
-            new VoiceOpusFrames.FixedPacketSplitter();
+    private final VoiceOpusFrames.FixedPacketSplitter packetSplitter;
     private final Set<String> loggedFrameGroups = new HashSet<>();
     private final List<byte[]> opusPackets = new ArrayList<>();
     private final OpusVoiceActivityDetector voiceActivity;
@@ -119,6 +118,8 @@ public final class VoiceAssistantController implements AutoCloseable {
                              VoiceApiClient client,
                              VoiceConversationHistory history) {
         this.context = context == null ? null : context.getApplicationContext();
+        this.packetSplitter = new VoiceOpusFrames.FixedPacketSplitter(
+                message -> SessionLog.line(this.context, message));
         this.replySink = replySink;
         this.commandExecutor = commandExecutor;
         this.weatherContextProvider = weatherContextProvider;
