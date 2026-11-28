@@ -3,6 +3,7 @@ package io.github.miam1ku.mibandoplusbridge.voice;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -63,5 +64,32 @@ public final class VoiceAssistantSettingsTest {
 
         assertFalse(values.configured());
         assertFalse(values.complete());
+    }
+
+    @Test public void anUnreadableAsrKeyFallsBackToTheChatKey() {
+        var keys = VoiceAssistantSettings.resolveKeys("chat-ciphertext", "sk-live",
+                VoiceAssistantSettings.DECRYPT_FAILED);
+
+        assertEquals("sk-live", keys.chatKey());
+        assertEquals("sk-live", keys.asrKey());
+        assertEquals(VoiceAssistantSettings.KeyState.OK, keys.keyState());
+        assertTrue(keys.asrFellBack());
+
+        var values = new VoiceAssistantSettings.Values(VoiceAssistantPreset.OPENAI, true,
+                "https://api.example.com/v1", "whisper-1", "model", "prompt",
+                keys.chatKey(), false, "https://api.example.com/v1/audio/transcriptions",
+                keys.asrKey(), keys.keyState());
+        assertTrue(values.configured());
+        assertTrue(values.complete());
+    }
+
+    @Test public void unreadableAsrWithoutAUsableFallbackStaysUnreadable() {
+        var keys = VoiceAssistantSettings.resolveKeys("chat-ciphertext",
+                VoiceAssistantSettings.DECRYPT_FAILED,
+                VoiceAssistantSettings.DECRYPT_FAILED);
+
+        assertEquals(VoiceAssistantSettings.KeyState.UNREADABLE, keys.keyState());
+        assertFalse(keys.asrFellBack());
+        assertEquals("", keys.asrKey());
     }
 }

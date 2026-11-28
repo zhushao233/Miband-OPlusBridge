@@ -44,6 +44,8 @@ public final class VoiceAssistantSettings {
     static final String DECRYPT_FAILED = "\u0000VOICE_KEY_UNREADABLE";
     private static final java.util.concurrent.atomic.AtomicBoolean unreadableLogged =
             new java.util.concurrent.atomic.AtomicBoolean();
+    private static final java.util.concurrent.atomic.AtomicBoolean asrFallbackLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private VoiceAssistantSettings() {}
 
@@ -65,26 +67,51 @@ public final class VoiceAssistantSettings {
         }
     }
 
+    /** Key material after the ASR-to-chat fallback, plus what the settings page should show. */
+    record ResolvedKeys(String chatKey, String asrKey, KeyState keyState, boolean asrFellBack) {}
+
+    /**
+     * Resolves the stored keys. An unreadable ASR key only makes the whole configuration
+     * unreadable when the chat-key fallback is empty too, because OpenAI-compatible providers
+     * commonly share one key between chat and transcription.
+     */
+    static ResolvedKeys resolveKeys(String chatCiphertext, String chatKeyRaw, String asrKeyRaw) {
+        String chatKey = chatKeyRaw == null ? "" : chatKeyRaw;
+        KeyState keyState = keyState(chatCiphertext, chatKeyRaw);
+        if (keyState == KeyState.UNREADABLE) chatKey = "";
+
+        boolean asrUnreadable = DECRYPT_FAILED.equals(asrKeyRaw);
+        String asrKey = asrUnreadable || asrKeyRaw == null ? "" : asrKeyRaw;
+        boolean fellBack = false;
+        if (asrKey.isBlank()) {
+            asrKey = chatKey;
+            fellBack = !asrKey.isBlank();
+        }
+        if (asrUnreadable && asrKey.isBlank()) keyState = KeyState.UNREADABLE;
+        return new ResolvedKeys(chatKey, asrKey, keyState, asrUnreadable && fellBack);
+    }
+
     public static Values load(Context context) {
         SharedPreferences prefs = prefs(context);
         String baseUrl = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL);
         VoiceAssistantPreset preset = VoiceAssistantPreset.fromSettings(
                 prefs.getString(KEY_PRESET, ""), baseUrl);
         String chatCiphertext = prefs.getString(KEY_API_KEY_CIPHERTEXT, "");
-        String chatKey = decrypt(chatCiphertext);
-        KeyState keyState = keyState(chatCiphertext, chatKey);
-        if (keyState == KeyState.UNREADABLE) {
-            chatKey = "";
+        String chatKeyRaw = decrypt(chatCiphertext);
+        String asrKeyRaw = decrypt(prefs.getString(KEY_ASR_API_KEY_CIPHERTEXT, ""));
+        ResolvedKeys keys = resolveKeys(chatCiphertext, chatKeyRaw, asrKeyRaw);
+        String chatKey = keys.chatKey();
+        String asrKey = keys.asrKey();
+        KeyState keyState = keys.keyState();
+        if (keyState == KeyState.UNREADABLE
+                && (DECRYPT_FAILED.equals(chatKeyRaw) || DECRYPT_FAILED.equals(asrKeyRaw))) {
             if (unreadableLogged.compareAndSet(false, true)) {
                 SessionLog.line(context, "VOICE_KEY_UNREADABLE");
             }
         }
-        String asrKey = decrypt(prefs.getString(KEY_ASR_API_KEY_CIPHERTEXT, ""));
-        if (DECRYPT_FAILED.equals(asrKey)) {
-            asrKey = "";
-            keyState = KeyState.UNREADABLE;
+        if (keys.asrFellBack() && asrFallbackLogged.compareAndSet(false, true)) {
+            SessionLog.line(context, "VOICE_ASR_KEY_FALLBACK");
         }
-        if (asrKey.isBlank()) asrKey = chatKey;
         String asrUrl = prefs.getString(KEY_ASR_URL, "");
         if (asrUrl.isBlank()) asrUrl = defaultAsrUrl(preset, baseUrl);
         String transcriptionModel = effectiveTranscriptionModel(
