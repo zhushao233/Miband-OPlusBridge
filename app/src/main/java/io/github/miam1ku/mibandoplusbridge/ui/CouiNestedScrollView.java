@@ -238,6 +238,11 @@ public final class CouiNestedScrollView extends NestedScrollView {
 
     /** The harder the fling, the deeper the rebound at the edge. */
     private float impactForVelocity(float velocityPx) {
+        return impactForVelocity(velocityPx, density);
+    }
+
+    /** Pure counterpart: converts a fling velocity to a rebound distance in pixels. */
+    static float impactForVelocity(float velocityPx, float density) {
         float speedDp = Math.abs(velocityPx) / density;
         float fraction = Math.min(1f, speedDp / 6000f);
         return (14f + 58f * (float) Math.sqrt(fraction)) * density;
