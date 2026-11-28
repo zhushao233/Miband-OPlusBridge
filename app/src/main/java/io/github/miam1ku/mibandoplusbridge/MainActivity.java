@@ -208,7 +208,7 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        screen = BridgeScreen.attachTabs(this, "设备", R.menu.main_bottom,
+        screen = BridgeScreen.attachTabs(this, "主页", R.menu.main_bottom,
                 R.id.tab_device, this::selectTab);
         screen.setSyncAction(this::syncNow);
         devicePage = screen.page();
@@ -295,7 +295,7 @@ public final class MainActivity extends AppCompatActivity {
         BridgeScreen target = primaryPage(itemId);
         if (target == null) return;
         screen.setPageChrome(itemId == R.id.tab_tools ? "工具"
-                : itemId == R.id.tab_settings ? "设置" : "设备", false, null);
+                : itemId == R.id.tab_settings ? "设置" : "主页", false, null);
         screen.setTabBarVisible(true);
         screen.checkTab(itemId);
         if (scrollTop) screen.scrollToTop();
