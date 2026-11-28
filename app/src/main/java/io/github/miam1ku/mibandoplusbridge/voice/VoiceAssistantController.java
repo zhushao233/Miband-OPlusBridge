@@ -81,7 +81,7 @@ public final class VoiceAssistantController implements AutoCloseable {
     });
     private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
     private final VoiceOpusFrames.FixedPacketSplitter packetSplitter;
-    private final Set<String> loggedFrameGroups = new HashSet<>();
+    private final Set<Integer> loggedFrameGroups = new HashSet<>();
     private final List<byte[]> opusPackets = new ArrayList<>();
     private final OpusVoiceActivityDetector voiceActivity;
     private ScheduledFuture<?> idleFinish;
@@ -92,7 +92,8 @@ public final class VoiceAssistantController implements AutoCloseable {
     private int packets;
     private int desyncCount;
     private int lastSequence = -1;
-    private byte[] lastPayload = new byte[0];
+    private int lastPayloadLength;
+    private int lastPayloadHash;
     private String firstChunkProbe = "";
     private String lastPartial = "";
     private VoiceAssistantSettings.Values sessionSettings;
@@ -156,25 +157,27 @@ public final class VoiceAssistantController implements AutoCloseable {
                                int opcode, byte[] payload) {
         if (closed || payload == null || payload.length == 0) return;
         if (channel == SppV2Codec.CHANNEL_MULTI_MODAL) {
-            String group = "channel=" + channel + " opcode=" + opcode + " flags=" + flags;
-            if (loggedFrameGroups.add(group)) {
-                SessionLog.line(context, "VOICE_MULTI_MODAL " + group + " bytes=" + payload.length
-                        + " frx=" + frx);
+            if (loggedFrameGroups.add(frameGroup(channel, opcode))) {
+                SessionLog.line(context, "VOICE_MULTI_MODAL channel=" + channel
+                        + " opcode=" + opcode + " flags=" + flags
+                        + " bytes=" + payload.length + " frx=" + frx);
             }
             return;
         }
         if (channel != SppV2Codec.CHANNEL_VOICE
                 || opcode != SppV2Codec.OPCODE_ENCRYPTED || flags != 0) return;
         synchronized (this) {
-            if (sequence == lastSequence && Arrays.equals(payload, lastPayload)) return;
+            int hash = Arrays.hashCode(payload);
+            if (sequence == lastSequence && payload.length == lastPayloadLength
+                    && hash == lastPayloadHash) return;
             lastSequence = sequence;
-            lastPayload = payload.clone();
+            lastPayloadLength = payload.length;
+            lastPayloadHash = hash;
         }
 
-        String group = "channel=" + channel + " opcode=" + opcode + " flags=" + flags;
-        if (loggedFrameGroups.add(group)) {
-            SessionLog.line(context, "VOICE_FRAME " + group + " bytes=" + payload.length
-                    + " frx=" + frx);
+        if (loggedFrameGroups.add(frameGroup(channel, opcode))) {
+            SessionLog.line(context, "VOICE_FRAME channel=" + channel + " opcode=" + opcode
+                    + " flags=" + flags + " bytes=" + payload.length + " frx=" + frx);
         }
         List<AivsStreamParser.Command> commands = parser.feed(payload);
         AivsStreamParser.Malformed malformed = parser.takeMalformed();
@@ -202,8 +205,8 @@ public final class VoiceAssistantController implements AutoCloseable {
         resetCaptureLocked();
         parser.reset();
         lastSequence = -1;
-        Arrays.fill(lastPayload, (byte) 0);
-        lastPayload = new byte[0];
+        lastPayloadLength = 0;
+        lastPayloadHash = 0;
     }
 
     private void handle(AivsStreamParser.Command command) {
@@ -781,8 +784,8 @@ public final class VoiceAssistantController implements AutoCloseable {
         voiceActivity.close();
         wipe(opusPackets);
         opusPackets.clear();
-        Arrays.fill(lastPayload, (byte) 0);
-        lastPayload = new byte[0];
+        lastPayloadLength = 0;
+        lastPayloadHash = 0;
         sessionSettings = null;
         parser.reset();
         worker.shutdownNow();
@@ -797,6 +800,11 @@ public final class VoiceAssistantController implements AutoCloseable {
             copy.add(packets.get(index).clone());
         }
         return copy;
+    }
+
+    /** One log line per channel/opcode pair keeps unknown voice traffic from flooding the log. */
+    private static int frameGroup(int channel, int opcode) {
+        return (channel << 8) | (opcode & 0xff);
     }
 
     private static void wipe(List<byte[]> packets) {
