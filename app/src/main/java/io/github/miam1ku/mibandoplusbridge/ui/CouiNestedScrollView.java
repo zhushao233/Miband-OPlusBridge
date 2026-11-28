@@ -121,7 +121,6 @@ public final class CouiNestedScrollView extends NestedScrollView {
                 pendingFlingVelocity = 0f;
                 overscrollDirection = 0;
                 cancelSettle();
-                setOverscroll(0f);
                 break;
             case MotionEvent.ACTION_MOVE: {
                 float y = event.getY();
@@ -247,9 +246,16 @@ public final class CouiNestedScrollView extends NestedScrollView {
         impactAnimator.addUpdateListener(animation ->
                 setOverscroll((float) animation.getAnimatedValue()));
         impactAnimator.addListener(new AnimatorListenerAdapter() {
+            private boolean canceled;
+
+            @Override public void onAnimationCancel(Animator animation) {
+                canceled = true;
+            }
+
             @Override
             public void onAnimationEnd(Animator animation) {
                 impactAnimator = null;
+                if (canceled) return;
                 settleOverscroll();
             }
         });
@@ -265,9 +271,16 @@ public final class CouiNestedScrollView extends NestedScrollView {
         settleAnimator.addUpdateListener(animation ->
                 setOverscroll((float) animation.getAnimatedValue()));
         settleAnimator.addListener(new AnimatorListenerAdapter() {
+            private boolean canceled;
+
+            @Override public void onAnimationCancel(Animator animation) {
+                canceled = true;
+            }
+
             @Override
             public void onAnimationEnd(Animator animation) {
                 settleAnimator = null;
+                if (canceled) return;
                 setOverscroll(0f);
                 sampleContent();
             }
