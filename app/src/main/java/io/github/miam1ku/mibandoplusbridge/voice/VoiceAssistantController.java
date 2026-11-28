@@ -642,6 +642,14 @@ public final class VoiceAssistantController implements AutoCloseable {
         sendReply(sid, text, tts);
     }
 
+    /**
+     * Sends the reply as Toast, plus DialogFinish either immediately (TTS) or after
+     * {@link #DIALOG_FINISH_DELAY_MS}.
+     *
+     * <p>Returns false only when the Toast or the immediate Finish could not be sent. For the
+     * delayed path a true return means the Finish was queued, not delivered; a delivery failure
+     * is logged as {@code VOICE_FINISH failed}.</p>
+     */
     private boolean sendReply(int sid, String text, boolean tts) {
         if (tts) send(sid, AivsInstructionCodec.tts(sid, text));
         if (!send(sid, AivsInstructionCodec.toast(sid, text))) return false;
@@ -652,12 +660,20 @@ public final class VoiceAssistantController implements AutoCloseable {
         return send(sid, AivsInstructionCodec.finish(sid));
     }
 
+    /**
+     * Queues DialogFinish and reports whether the queue accepted it. The delayed send is not
+     * observable by the caller, so its failure is logged here instead of being dropped.
+     */
     private boolean scheduleFinish(int sid) {
         try {
-            worker.schedule(() -> send(sid, AivsInstructionCodec.finish(sid)),
-                    DIALOG_FINISH_DELAY_MS, TimeUnit.MILLISECONDS);
+            worker.schedule(() -> {
+                if (!send(sid, AivsInstructionCodec.finish(sid))) {
+                    SessionLog.line(context, "VOICE_FINISH failed session=" + sid);
+                }
+            }, DIALOG_FINISH_DELAY_MS, TimeUnit.MILLISECONDS);
             return true;
         } catch (RuntimeException rejected) {
+            SessionLog.line(context, "VOICE_FINISH rejected session=" + sid);
             return false;
         }
     }
