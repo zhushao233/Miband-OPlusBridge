@@ -12,7 +12,13 @@ import android.view.View;
 import android.view.animation.DecelerateInterpolator;
 import androidx.core.widget.NestedScrollView;
 
-/** NestedScrollView with displacement overscroll bounce and the COUI scroll-edge haptic. */
+/**
+ * NestedScrollView with displacement overscroll bounce and the COUI scroll-edge haptic.
+ *
+ * <p>Short pages receive up to {@code collapseRange} of extra scroll range so the large title
+ * can fully collapse. This is intentional: a little blank space at the bottom is preferred over
+ * a half-collapsed title, and scrolling stops as soon as the title is fully collapsed.</p>
+ */
 public final class CouiNestedScrollView extends NestedScrollView {
     private static final int COUI_SCROLL_EDGE = 307;
     private static final float OVERSCROLL_RATIO = 0.55f;
