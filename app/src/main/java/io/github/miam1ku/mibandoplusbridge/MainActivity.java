@@ -1572,9 +1572,51 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void shareDebugLog() {
+        boolean rawCapture = io.github.miam1ku.mibandoplusbridge.voice.VoiceAssistantSettings
+                .load(this).captureRaw();
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.SampleSummary samples =
+                io.github.miam1ku.mibandoplusbridge.data.SessionLog.voiceSampleSummary(this);
+        StringBuilder message = new StringBuilder();
+        if (rawCapture) {
+            message.append("“保存原始语音帧”已开启，调试包将包含录音片段。\n");
+            if (samples.present()) {
+                message.append("检测到 ").append(samples.files()).append(" 个原始语音文件，共 ")
+                        .append(debugSize(samples.bytes())).append("。\n");
+            } else {
+                message.append("原始语音文件会在本次会话开始录音后生成。\n");
+            }
+        } else {
+            message.append("当前导出以日志为主；包含录音片段需要先在语音设置中开启“保存原始语音帧”。\n");
+            if (samples.present()) {
+                message.append("已忽略 ").append(samples.files()).append(" 个历史语音文件，共 ")
+                        .append(debugSize(samples.bytes())).append("。\n");
+            }
+        }
+        message.append("录音片段可能包含你或他人的真实说话内容，对外分享前请确认已获得本人同意。");
+        MaterialAlertDialogBuilder dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("导出调试日志")
+                .setMessage(message.toString());
+        if (rawCapture) {
+            dialog.setPositiveButton("仅导出日志",
+                            (ignored, which) -> exportDebugLog(false))
+                    .setNegativeButton("包含录音片段一起导出",
+                            (ignored, which) -> exportDebugLog(true));
+        } else {
+            dialog.setPositiveButton("导出日志", (ignored, which) -> exportDebugLog(false));
+        }
+        dialog.show();
+    }
+
+    private static String debugSize(long bytes) {
+        if (bytes < 1024) return bytes + " 字节";
+        return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0);
+    }
+
+    private void exportDebugLog(boolean includeVoiceSamples) {
         worker.execute(() -> {
             try {
-                java.io.File file = io.github.miam1ku.mibandoplusbridge.data.SessionLog.export(this);
+                java.io.File file = io.github.miam1ku.mibandoplusbridge.data.SessionLog
+                        .export(this, includeVoiceSamples);
                 Uri uri = androidx.core.content.FileProvider.getUriForFile(this,
                         "io.github.miam1ku.mibandoplusbridge.debuglog", file);
                 Intent send = new Intent(Intent.ACTION_SEND);
