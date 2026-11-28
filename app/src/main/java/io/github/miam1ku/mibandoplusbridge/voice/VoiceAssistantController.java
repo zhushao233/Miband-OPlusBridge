@@ -38,6 +38,11 @@ public final class VoiceAssistantController implements AutoCloseable {
 
     private static final int MAX_AUDIO_BYTES = 768 * 1024;
     private static final int MAX_OPUS_PACKETS = 1_600;
+    /**
+     * Fallback idle timer used when the band stops sending audio without an explicit end.
+     * This is deliberately longer than {@link VoiceActivityState#END_SILENCE_MILLIS} (1200 ms),
+     * which closes a phrase from decoded PCM. Change one and check the other.
+     */
     private static final long END_SILENCE_MS = 2_500L;
     private static final long MAX_CAPTURE_MS = 30_000L;
     private static final long PARTIAL_INTERVAL_MS = 1_200L;

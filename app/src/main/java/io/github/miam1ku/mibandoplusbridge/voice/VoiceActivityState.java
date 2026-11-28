@@ -6,6 +6,11 @@ final class VoiceActivityState {
     static final int FRAME_MILLIS = 20;
     static final int MIN_SPEECH_MILLIS = 180;
     static final int MAX_NATURAL_PAUSE_MILLIS = 500;
+    /**
+     * VAD endpoint: silence long enough to close a spoken phrase while the capture stays open.
+     * The controller's separate {@code END_SILENCE_MS = 2500} is the fallback idle timer for a
+     * band that stopped streaming. Keep both values consistent when changing either one.
+     */
     static final int END_SILENCE_MILLIS = 1_200;
 
     enum Event {
