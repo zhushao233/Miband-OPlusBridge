@@ -66,6 +66,12 @@ public final class VoiceConversationHistory {
         }
     }
 
+    /**
+     * Rewrites the small history file in full instead of appending a line. Entries are
+     * infrequent, capped at 200 (under 1 MB), and the temporary-file swap gives readers one
+     * atomic snapshot: a partial tail from a crash can never hide the whole history. Revisit
+     * this if writes ever become hot or the cap grows into megabytes.
+     */
     public boolean append(Entry entry) {
         if (entry == null) return false;
         synchronized (LOCK) {
