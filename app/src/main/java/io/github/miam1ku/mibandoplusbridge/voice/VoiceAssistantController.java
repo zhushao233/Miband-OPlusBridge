@@ -339,7 +339,8 @@ public final class VoiceAssistantController implements AutoCloseable {
             synchronized (this) {
                 if (closed || currentGeneration != generation || finalizing) return;
             }
-            ogg = VoiceOpusFrames.toOggOpus(window);
+            ogg = VoiceOpusFrames.toOggOpus(window,
+                    VoiceOpusFrames.samplesPerPacket(window));
             String text = client.transcribe(settings, ogg).trim();
             if (text.isEmpty() || text.equals(previous)) return;
             synchronized (this) {
@@ -444,7 +445,7 @@ public final class VoiceAssistantController implements AutoCloseable {
         }
         byte[] ogg;
         try {
-            ogg = VoiceOpusFrames.toOggOpus(opus);
+            ogg = VoiceOpusFrames.toOggOpus(opus, VoiceOpusFrames.samplesPerPacket(opus));
         } catch (RuntimeException malformed) {
             wipe(opus);
             Arrays.fill(stream, (byte) 0);

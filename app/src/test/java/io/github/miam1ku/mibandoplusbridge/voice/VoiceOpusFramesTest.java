@@ -135,6 +135,23 @@ public final class VoiceOpusFramesTest {
         assertEquals(960L, granuleOfPage(ogg, 3));
     }
 
+    @Test public void tocDurationsFollowTheOpusFrameTable() {
+        assertEquals(960, VoiceOpusFrames.samplesForPacket(new byte[] {0x4b}));
+        assertEquals(1_920, VoiceOpusFrames.samplesForPacket(new byte[] {0x4b, 0x02}));
+        assertEquals(2_880, VoiceOpusFrames.samplesForPacket(new byte[] {0x18}));
+        assertEquals(5_760, VoiceOpusFrames.samplesForPacket(new byte[] {0x03, 0x30}));
+        assertEquals(120, VoiceOpusFrames.samplesForPacket(new byte[] {(byte) 0x80}));
+    }
+
+    @Test public void capturedBodyKeepsTheTwentyMillisecondTimeline() {
+        List<byte[]> packets = VoiceOpusFrames.extract(hex(CAPTURED_AUDIO_BODY));
+
+        int[] samples = VoiceOpusFrames.samplesPerPacket(packets);
+
+        assertEquals(packets.size(), samples.length);
+        for (int value : samples) assertEquals(VoiceOpusFrames.FRAME_GRANULE, value);
+    }
+
     @Test public void oggCrcMatchesTheStandardOggPolynomial() {
         assertEquals(0, VoiceOpusFrames.oggCrc(new byte[0]));
         assertEquals(0x5fb0a94f,

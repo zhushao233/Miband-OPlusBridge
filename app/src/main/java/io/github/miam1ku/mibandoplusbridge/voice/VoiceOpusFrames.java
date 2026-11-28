@@ -11,9 +11,9 @@ import java.util.function.Consumer;
 /**
  * Length-prefixed Opus extraction and a small Ogg Opus container writer.
  *
- * <p>The band uses 20 ms Opus frames. Ogg granule positions are always expressed on the
- * 48 kHz Opus timeline, so each packet advances by 960 samples even though microphone input
- * is 16 kHz.</p>
+ * <p>Ogg granule positions always use the 48 kHz Opus timeline. The current band sends 20 ms,
+ * 80-byte packets (960 samples each), but the duration is read from each packet's TOC so a
+ * firmware that changes frame sizes does not silently stretch the timeline.</p>
  */
 public final class VoiceOpusFrames {
     /** One 20 ms Opus packet in the band's AIVS audio body. */
@@ -22,6 +22,9 @@ public final class VoiceOpusFrames {
     private static final int FRAME_MILLIS = 20;
     /** Samples per 20 ms frame on the 48 kHz Opus timeline. */
     public static final int FRAME_GRANULE = OPUS_TIMELINE_RATE * FRAME_MILLIS / 1_000;
+    /** Longest duration one Opus packet may carry: 120 ms at 48 kHz. */
+    private static final int MAX_PACKET_GRANULE = 5_760;
+    private static final int[] SILK_FRAME_SAMPLES = {480, 960, 1_920, 2_880};
     private static final int OGG_VERSION = 0;
     private static final int OGG_BOS = 2;
     private static final int OGG_EOS = 4;
@@ -119,10 +122,53 @@ public final class VoiceOpusFrames {
     }
 
     /**
-     * Builds an Ogg Opus stream. {@code samplesPerPacket} carries the decoder's real output for
-     * each packet; when it is null or shorter than the packet list, 960 samples (20 ms at
-     * 48 kHz) is assumed. That fallback is a degenerate assumption for the current 80-byte
-     * firmware, not a verified property of other firmwares.
+     * Granule advance for every packet on the 48 kHz Opus timeline.
+     *
+     * <p>Durations come from each packet's TOC instead of the VAD decoder: the decoder runs on
+     * its own thread, drops queued packets under load and can lag behind capture when a session
+     * ends, so its sample counts cannot be aligned 1:1 with {@code packets}. The TOC is
+     * authoritative and stays aligned even when the splitter drops an invalid packet.</p>
+     */
+    public static int[] samplesPerPacket(List<byte[]> packets) {
+        if (packets == null || packets.isEmpty()) return new int[0];
+        int[] samples = new int[packets.size()];
+        for (int index = 0; index < packets.size(); index++) {
+            samples[index] = samplesForPacket(packets.get(index));
+        }
+        return samples;
+    }
+
+    /** Samples carried by one Opus packet, per RFC 6716 section 3.1. */
+    static int samplesForPacket(byte[] packet) {
+        if (packet == null || packet.length == 0) return FRAME_GRANULE;
+        int toc = packet[0] & 0xff;
+        int frameSamples = frameSamplesForConfig(toc >> 3);
+        int frameCode = toc & 3;
+        int frames;
+        if (frameCode == 0) {
+            frames = 1;
+        } else if (frameCode == 1 || frameCode == 2) {
+            frames = 2;
+        } else {
+            if (packet.length < 2) return frameSamples;
+            frames = packet[1] & 0x3f;
+            if (frames == 0) return frameSamples;
+        }
+        long total = (long) frameSamples * frames;
+        return (int) Math.max(frameSamples, Math.min(MAX_PACKET_GRANULE, total));
+    }
+
+    private static int frameSamplesForConfig(int config) {
+        if (config < 12) return SILK_FRAME_SAMPLES[config & 3];
+        if (config < 16) return 480 << (config & 1);
+        return 120 << (config & 3);
+    }
+
+    /**
+     * Builds an Ogg Opus stream. {@code samplesPerPacket} carries each packet's granule advance
+     * (see {@link #samplesPerPacket}); when it is null or shorter than the packet list, 960
+     * samples (20 ms at 48 kHz) is assumed. That fallback is a degenerate assumption for the
+     * current 80-byte firmware, not a verified property of other firmwares.
      */
     public static byte[] toOggOpus(List<byte[]> packets, int[] samplesPerPacket) {
         if (packets == null || packets.isEmpty()) {
