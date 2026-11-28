@@ -111,6 +111,26 @@ public final class VoiceOpusFramesTest {
         assertFalse(VoiceOpusFrames.plausibleOpusPacket(packet));
     }
 
+    @Test public void invalidPacketLogsAreRateLimitedAndSummarised() {
+        List<String> lines = new ArrayList<>();
+        VoiceOpusFrames.FixedPacketSplitter splitter =
+                new VoiceOpusFrames.FixedPacketSplitter(lines::add);
+        byte[] block = new byte[250 * VoiceOpusFrames.VOICE_OPUS_PACKET_BYTES];
+        for (int index = 0; index < 250; index++) {
+            block[index * VoiceOpusFrames.VOICE_OPUS_PACKET_BYTES] = 0x03;
+            block[index * VoiceOpusFrames.VOICE_OPUS_PACKET_BYTES + 1] = 0x3f;
+        }
+
+        assertTrue(splitter.accept(block).isEmpty());
+        assertEquals(3, lines.size());
+        assertEquals(0, splitter.takeRemainder().length);
+        assertEquals(4, lines.size());
+        assertTrue(lines.get(3).startsWith("VOICE_PACKET_INVALID_TOTAL count=250 dropped=250"));
+
+        splitter.reset();
+        assertEquals(4, lines.size());
+    }
+
     @Test public void buildsOggOpusPagesWithCorrectTimeline() {
         byte[] ogg = VoiceOpusFrames.toOggOpus(List.of(
                 new byte[] {0x08, 0x78}, new byte[] {0x08, 0x79}));

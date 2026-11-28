@@ -57,6 +57,7 @@ public final class VoiceOpusFrames {
         private final byte[] pending = new byte[VOICE_OPUS_PACKET_BYTES];
         private final Consumer<String> invalidSink;
         private int pendingBytes;
+        private long invalidPackets;
 
         public FixedPacketSplitter() {
             this(ignored -> { });
@@ -100,12 +101,19 @@ public final class VoiceOpusFrames {
                 packets.add(packet);
                 return;
             }
-            invalidSink.accept("VOICE_PACKET_INVALID bytes=" + packet.length
-                    + " toc=" + String.format(java.util.Locale.ROOT, "%02x", packet[0] & 0xff));
+            invalidPackets++;
+            if (invalidPackets == 1 || invalidPackets % 100 == 0) {
+                invalidSink.accept("VOICE_PACKET_INVALID bytes=" + packet.length
+                        + " toc=" + String.format(java.util.Locale.ROOT, "%02x",
+                        packet[0] & 0xff));
+            }
         }
 
         public byte[] takeRemainder() {
-            if (pendingBytes == 0) return new byte[0];
+            if (pendingBytes == 0) {
+                logInvalidTotal();
+                return new byte[0];
+            }
             byte[] remainder = Arrays.copyOf(pending, pendingBytes);
             reset();
             return remainder;
@@ -114,6 +122,14 @@ public final class VoiceOpusFrames {
         public void reset() {
             Arrays.fill(pending, (byte) 0);
             pendingBytes = 0;
+            logInvalidTotal();
+        }
+
+        private void logInvalidTotal() {
+            if (invalidPackets == 0) return;
+            invalidSink.accept("VOICE_PACKET_INVALID_TOTAL count=" + invalidPackets
+                    + " dropped=" + invalidPackets);
+            invalidPackets = 0;
         }
     }
 
