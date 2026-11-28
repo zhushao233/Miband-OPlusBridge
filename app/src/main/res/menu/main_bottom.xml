@@ -4,7 +4,7 @@
         <item
             android:id="@+id/tab_device"
             android:icon="@drawable/ic_tab_device"
-            android:title="设备" />
+            android:title="主页" />
         <item
             android:id="@+id/tab_tools"
             android:icon="@drawable/ic_tab_tools"

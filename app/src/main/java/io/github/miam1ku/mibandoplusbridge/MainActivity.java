@@ -208,7 +208,7 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        screen = BridgeScreen.attachTabs(this, "设备", R.menu.main_bottom,
+        screen = BridgeScreen.attachTabs(this, "主页", R.menu.main_bottom,
                 R.id.tab_device, this::selectTab);
         screen.setSyncAction(this::syncNow);
         devicePage = screen.page();
@@ -295,7 +295,7 @@ public final class MainActivity extends AppCompatActivity {
         BridgeScreen target = primaryPage(itemId);
         if (target == null) return;
         screen.setPageChrome(itemId == R.id.tab_tools ? "工具"
-                : itemId == R.id.tab_settings ? "设置" : "设备", false, null);
+                : itemId == R.id.tab_settings ? "设置" : "主页", false, null);
         screen.setTabBarVisible(true);
         screen.checkTab(itemId);
         if (scrollTop) screen.scrollToTop();
@@ -312,11 +312,11 @@ public final class MainActivity extends AppCompatActivity {
 
     private void showSecondaryPage(BridgeScreen page, String title, Runnable onBack) {
         secondaryPage = true;
-        screen.showPage(page.body, PageTransition.FORWARD, true);
         screen.setPageChrome(title, true, () -> {
             showPrimaryTab(currentTabId, true, PageTransition.BACK);
             if (onBack != null) onBack.run();
         });
+        screen.showPage(page.body, PageTransition.FORWARD, true);
         screen.setTabBarVisible(false);
         screen.scrollToTop();
         if (backCallback != null) backCallback.setEnabled(true);
@@ -561,7 +561,7 @@ public final class MainActivity extends AppCompatActivity {
                 () -> startActivity(new Intent().setClassName(this,
                         "io.github.miam1ku.mibandoplusbridge.integration.BandDetailsInternalActivity")));
         deviceDetailRow.setSummary("已保存历史、日汇总核对");
-        deviceDetailRow.setIcon(rowIcon(R.drawable.ic_tab_device));
+        deviceDetailRow.setIcon(rowIcon(R.drawable.ic_band_top_view));
         MiuixBasicView weather = toolsPage.navRow(links, "天气同步",
                 () -> startActivity(new Intent(this, WeatherActivity.class)));
         weather.setSummary("位置天气、城市关联");
@@ -627,7 +627,7 @@ public final class MainActivity extends AppCompatActivity {
             showSecondaryPage(bindingPage, Copy.SETTINGS_BINDING, this::refreshDevice);
         });
         binding.setSummary(Copy.SETTINGS_BINDING_SUMMARY);
-        binding.setIcon(rowIcon(R.drawable.ic_tab_device));
+        binding.setIcon(rowIcon(R.drawable.ic_band_top_view));
         MiuixBasicView debug = settingsPage.navRow(advanced, Copy.SETTINGS_DEBUG, () -> {
             refreshDebugStatus();
             showSecondaryPage(debugPage, Copy.SETTINGS_DEBUG, this::refreshDevice);

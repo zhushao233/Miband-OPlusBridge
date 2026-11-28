@@ -3,6 +3,7 @@ package com.itos.coui.effect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -51,9 +52,10 @@ internal fun CouiFloatingSurface.mapRect(rect: Rect): Rect = Rect(
 )
 
 // forceDraw 先扩本地 rect, 再映射至 surface; extension 已是 dimensionPixelSize。
-internal fun CouiFloatingSurface.materialRect(extension: Int): Rect {
+// 纵向至少覆盖模糊 kernel, 否则 MIRROR 会把 patch 外沿折叠回胶囊内部。
+internal fun CouiFloatingSurface.materialRect(extension: Int, blurPadding: Float = 0f): Rect {
     val x = if (extension > 0) extension + 51f else 1f
-    val y = if (extension > 0) 11f else 1f
+    val y = max(11f, ceil(blurPadding) + 1f)
     return mapRect(Rect(-x, -y, bounds.width + x, bounds.height + y))
 }
 

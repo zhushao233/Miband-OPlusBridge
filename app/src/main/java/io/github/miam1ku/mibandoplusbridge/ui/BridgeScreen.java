@@ -32,16 +32,13 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.core.widget.NestedScrollView;
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
-import com.hchen.himiuix.MiuixAppBar;
 import com.hchen.himiuix.MiuixBasicView;
 import com.hchen.himiuix.MiuixViewGroup;
 import com.hchen.himiuix.fill.MiuixFillView;
-import com.hchen.himiuix.helper.WindowInsetsHelper;
-import com.hchen.himiuix.utils.MiuiSuperBlur;
 import com.hchen.himiuix.widget.MiuixTextView;
-import com.itos.coui.host.CouiBackButtonView;
 import com.itos.coui.host.CouiSwitchView;
 import com.itos.coui.host.CouiTabBarView;
+import com.itos.coui.host.CouiTopBarView;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -50,6 +47,9 @@ import java.util.List;
  * Pages read top to bottom: status, next step, features, help, management, advanced.
  */
 public final class BridgeScreen {
+    private static final int TOP_BAR_HEIGHT_DP = 52;
+    private static final int TAB_BAR_CLEARANCE_DP = 104;
+
     /** Colour role of a chip, notice card, or status line. */
     public enum Tone { POSITIVE, ACTIVE, NEUTRAL, ATTENTION }
 
@@ -65,12 +65,15 @@ public final class BridgeScreen {
     private enum ActionStyle { FILLED, OUTLINED, TEXT, DANGER }
 
     public final LinearLayout body;
+    private int contentInsetLeft;
+    private int contentInsetTop = -1;
+    private int contentInsetRight;
+    private int contentInsetBottom;
     private final AppCompatActivity activity;
-    private final MiuixAppBar appBar;
-    private final NestedScrollView scroll;
+    private final CouiTopBarView topBar;
+    private final CouiNestedScrollView scroll;
     private final CouiTabBarView tabBar;
     private final View tabBarContainer;
-    private final CouiBackButtonView backButton;
     private final MiuixFillView pageHost;
     private final FrameLayout pageFrame;
     private final List<LinearLayout> pages = new ArrayList<>();
@@ -81,65 +84,67 @@ public final class BridgeScreen {
     private boolean predictiveBack;
     private LinearLayout predictiveSource;
     private LinearLayout predictiveTarget;
+    private float lastPredictiveSampleProgress = -1f;
+    private int predictiveSampleFrames;
 
     private BridgeScreen(AppCompatActivity activity, LinearLayout body) {
-        this(activity, body, null, null, null, null, null, null, null);
+        this(activity, body, null, null, null, null, null, null);
     }
 
-    private BridgeScreen(AppCompatActivity activity, LinearLayout body, MiuixAppBar appBar,
-                         NestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
-                         CouiTabBarView tabBar, View tabBarContainer,
-                         CouiBackButtonView backButton) {
+    private BridgeScreen(AppCompatActivity activity, LinearLayout body, CouiTopBarView topBar,
+                         CouiNestedScrollView scroll, MiuixFillView pageHost, FrameLayout pageFrame,
+                         CouiTabBarView tabBar, View tabBarContainer) {
         this.activity = activity;
         this.body = body;
-        this.appBar = appBar;
+        this.topBar = topBar;
         this.scroll = scroll;
         this.pageHost = pageHost;
         this.pageFrame = pageFrame;
         this.tabBar = tabBar;
         this.tabBarContainer = tabBarContainer;
-        this.backButton = backButton;
     }
 
     public static BridgeScreen attach(AppCompatActivity activity, String title, boolean back) {
         configureEdgeToEdge(activity);
 
-        MiuixAppBar appBar = new MiuixAppBar(activity);
-        appBar.setTitle(title);
-        appBar.getToolbar().setNavigationIcon(null);
+        FrameLayout root = new FrameLayout(activity);
+        root.setBackgroundResource(surfaceRes(activity));
 
-        NestedScrollView scroll = new CouiNestedScrollView(activity);
+        CouiNestedScrollView scroll = new CouiNestedScrollView(activity);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
+        scroll.setBackgroundResource(surfaceRes(activity));
 
         MiuixFillView body = new MiuixFillView(activity);
         body.setBackgroundResource(surfaceRes(activity));
-        int topInset = body.getPaddingTop();
-        int navigationHeight = navigationBarHeight(activity);
-        body.setPadding(0, topInset + dp(activity, 4), 0,
-                navigationHeight + dp(activity, 24));
+        body.setPadding(0, dp(activity, TOP_BAR_HEIGHT_DP), 0,
+                navigationBarHeight(activity) + dp(activity, 24));
         scroll.addView(body, new NestedScrollView.LayoutParams(-1, -2));
-        appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
+        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
 
-        FrameLayout root = new FrameLayout(activity);
-        root.addView(appBar, new FrameLayout.LayoutParams(-1, -1));
-        CouiBackButtonView backButton = addCouiBackButton(activity, root, appBar, back);
-        if (back) backButton.setOnBackClickListener(activity::finish);
+        CouiTopBarView topBar = new CouiTopBarView(activity, scroll);
+        topBar.setTitle(title);
+        topBar.setBackVisible(back);
+        topBar.setLargeTitle(!back);
+        topBar.setContourGlowEnabled(UiStyle.contourGlow(activity));
+        if (back) topBar.setOnBackClickListener(activity::finish);
+        root.addView(topBar, new FrameLayout.LayoutParams(-1, -1));
         activity.setContentView(root);
+        scroll.setOnContentMovedListener(topBar::captureBackdropNow);
+        topBar.requestCapture();
+        BridgeScreen screen = new BridgeScreen(activity, body, topBar, scroll, null, null, null, null);
+        screen.applyTopBarPadding();
 
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            body.setPadding(bars.left, topInset + dp(activity, 4), bars.right,
-                    Math.max(bars.bottom, navigationHeight) + dp(activity, 24));
+            screen.contentInsetLeft = bars.left;
+            screen.contentInsetTop = bars.top;
+            screen.contentInsetRight = bars.right;
+            screen.contentInsetBottom = Math.max(bars.bottom, navigationBarHeight(activity))
+                    + dp(activity, 24);
+            screen.applyTopBarPadding();
             return insets;
         });
-        appBar.post(() -> {
-            appBar.targetStart(scroll);
-            appBar.targetRegister(scroll);
-        });
-        BridgeScreen screen = new BridgeScreen(activity, body, appBar, scroll, null, null, null,
-                null, backButton);
-        appBar.post(() -> clearAppBarBlur(appBar));
         return screen;
     }
 
@@ -154,33 +159,31 @@ public final class BridgeScreen {
         FrameLayout shell = new FrameLayout(activity);
         shell.setClipChildren(false);
         shell.setBackgroundResource(surfaceRes(activity));
-        FrameLayout contentRoot = new FrameLayout(activity);
-        contentRoot.setBackgroundResource(surfaceRes(activity));
-        shell.addView(contentRoot, new FrameLayout.LayoutParams(-1, -1));
 
-        MiuixAppBar appBar = new MiuixAppBar(activity);
-        appBar.setTitle(title);
-        appBar.getToolbar().setNavigationIcon(null);
-
-        NestedScrollView scroll = new CouiNestedScrollView(activity);
-        scroll.setFillViewport(true);
+        CouiNestedScrollView scroll = new CouiNestedScrollView(activity);
+        scroll.setFillViewport(false);
         scroll.setClipToPadding(false);
+        scroll.setBackgroundResource(surfaceRes(activity));
 
         MiuixFillView pageHost = new MiuixFillView(activity);
         pageHost.setOrientation(LinearLayout.VERTICAL);
         pageHost.setBackgroundResource(surfaceRes(activity));
-        int topInset = pageHost.getPaddingTop();
-        pageHost.setPadding(0, topInset, 0, 0);
+        pageHost.setPadding(0, dp(activity, TOP_BAR_HEIGHT_DP), 0, 0);
         FrameLayout pageFrame = new FrameLayout(activity);
         pageFrame.setClipChildren(true);
         pageFrame.setBackgroundResource(surfaceRes(activity));
         pageHost.addView(pageFrame, new LinearLayout.LayoutParams(-1, -2));
         scroll.addView(pageHost, new NestedScrollView.LayoutParams(-1, -2));
-        appBar.addView(scroll, new MiuixAppBar.LayoutParams(-1, -1));
+        shell.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
 
-        contentRoot.addView(appBar, new FrameLayout.LayoutParams(-1, -1));
+        CouiTopBarView topBar = new CouiTopBarView(activity, scroll);
+        topBar.setTitle(title);
+        topBar.setBackVisible(false);
+        topBar.setLargeTitle(true);
+        topBar.setContourGlowEnabled(UiStyle.contourGlow(activity));
+        shell.addView(topBar, new FrameLayout.LayoutParams(-1, -1));
 
-        CouiTabBarView tabBar = new CouiTabBarView(activity, contentRoot);
+        CouiTabBarView tabBar = new CouiTabBarView(activity, scroll);
         tabBar.setMenu(menuRes, checkedItemId);
         tabBar.setOnTabSelectedListener(itemId -> {
             if (listener != null) listener.onTabSelected(itemId);
@@ -194,25 +197,31 @@ public final class BridgeScreen {
 
         shell.addView(tabBar, new FrameLayout.LayoutParams(-1, -1));
 
-        CouiBackButtonView backButton = addCouiBackButton(activity, shell, appBar, false);
         activity.setContentView(shell);
-        BridgeScreen screen = new BridgeScreen(activity, pageHost, appBar, scroll, pageHost,
-                pageFrame, tabBar, tabBar, backButton);
-        appBar.post(() -> clearAppBarBlur(appBar));
-        screen.bottomClearance = dp(activity, 104);
+        scroll.setOnContentMovedListener(() -> {
+            topBar.captureBackdropNow();
+            tabBar.captureBackdropNow();
+        });
+        topBar.requestCapture();
+        tabBar.requestCapture();
+        BridgeScreen screen = new BridgeScreen(activity, pageHost, topBar, scroll, pageHost,
+                pageFrame, tabBar, tabBar);
+        screen.bottomClearance = dp(activity, TAB_BAR_CLEARANCE_DP);
+        scroll.setMinimumContentOverflow(topBar.collapseRangePx());
+        screen.applyTopBarPadding();
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (view, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            pageHost.setPadding(bars.left, topInset, bars.right, 0);
-            screen.bottomClearance = dp(activity, 104) + bars.bottom;
+            screen.contentInsetLeft = bars.left;
+            screen.contentInsetTop = bars.top;
+            screen.contentInsetRight = bars.right;
+            screen.contentInsetBottom = 0;
+            screen.applyTopBarPadding();
+            screen.bottomClearance = dp(activity, TAB_BAR_CLEARANCE_DP) + bars.bottom;
             for (LinearLayout page : screen.pages) {
                 page.setPadding(0, 0, 0, screen.bottomClearance);
                 screen.fillPageViewport(page);
             }
             return insets;
-        });
-        appBar.post(() -> {
-            appBar.targetStart(scroll);
-            appBar.targetRegister(scroll);
         });
         return screen;
     }
@@ -236,41 +245,27 @@ public final class BridgeScreen {
     }
 
     public void setPageChrome(String title, boolean back, Runnable onBack) {
-        if (appBar == null) return;
-        appBar.setTitle(title);
-        appBar.getToolbar().setNavigationIcon(null);
+        if (topBar == null) return;
+        topBar.setTitle(title);
+        topBar.setBackVisible(back);
+        topBar.setLargeTitle(!back);
+        if (scroll != null) {
+            scroll.setMinimumContentOverflow(back ? 0 : topBar.collapseRangePx());
+        }
+        applyTopBarPadding();
+        if (scroll != null) scroll.markContentDirty();
         if (back) {
-            appBar.getToolbar().setNavigationOnClickListener(null);
-            if (backButton != null) backButton.setVisibility(View.VISIBLE);
-            if (backButton != null) backButton.setOnBackClickListener(() -> {
+            topBar.setOnBackClickListener(() -> {
                 if (onBack != null) onBack.run();
             });
         } else {
-            appBar.getToolbar().setNavigationOnClickListener(null);
-            if (backButton != null) backButton.setVisibility(View.GONE);
+            topBar.setOnBackClickListener(null);
         }
     }
 
     public void setContourGlowEnabled(boolean enabled) {
         if (tabBar != null) tabBar.setContourGlowEnabled(enabled);
-        if (backButton != null) backButton.setContourGlowEnabled(enabled);
-    }
-
-    /**
-     * Miuix applies its frosted material on attach and exposes no public blur
-     * switch. Walk the direct children instead of reading the private chrome
-     * field, so a library refactor degrades to a no-op rather than a silent
-     * reflection failure.
-     */
-    private static void clearAppBarBlur(MiuixAppBar appBar) {
-        int color = appBar.getContext().getColor(
-                com.hchen.himiuix.R.color.miuix_theme_color);
-        for (int i = 0; i < appBar.getChildCount(); i++) {
-            View child = appBar.getChildAt(i);
-            if (child instanceof NestedScrollView) continue;
-            MiuiSuperBlur.clearAllBlur(child);
-            child.setBackgroundColor(color);
-        }
+        if (topBar != null) topBar.setContourGlowEnabled(enabled);
     }
 
     public void setSyncAction(Runnable action) {
@@ -289,6 +284,7 @@ public final class BridgeScreen {
         if (tabBarContainer == null) return;
         if (visible) {
             tabBarContainer.setVisibility(View.VISIBLE);
+            if (tabBar != null) tabBar.requestCapture();
         } else {
             tabBarContainer.animate().cancel();
             tabBarContainer.setVisibility(View.GONE);
@@ -302,7 +298,9 @@ public final class BridgeScreen {
     }
 
     public void scrollToTop() {
-        if (scroll != null) scroll.scrollTo(0, 0);
+        if (scroll == null) return;
+        scroll.clearFlingImpulse();
+        scroll.scrollTo(0, 0);
     }
 
     /** Swaps the visible page with one shared motion language for tabs and drill-down pages. */
@@ -360,6 +358,8 @@ public final class BridgeScreen {
         predictiveSource = visiblePage;
         predictiveTarget = target;
         predictiveBack = true;
+        lastPredictiveSampleProgress = -1f;
+        predictiveSampleFrames = 0;
         for (LinearLayout page : pages) {
             if (page != predictiveSource && page != predictiveTarget) hidePage(page);
         }
@@ -392,6 +392,14 @@ public final class BridgeScreen {
         if (tabBarContainer != null) {
             tabBarContainer.setAlpha(value);
             tabBarContainer.setTranslationY(dp(activity, 8) * (1f - value));
+        }
+        predictiveSampleFrames++;
+        if (lastPredictiveSampleProgress < 0f
+                || Math.abs(value - lastPredictiveSampleProgress) >= 0.02f
+                || predictiveSampleFrames >= 3) {
+            lastPredictiveSampleProgress = value;
+            predictiveSampleFrames = 0;
+            sampleBars();
         }
     }
 
@@ -568,11 +576,14 @@ public final class BridgeScreen {
     private void runPageAnimation(AnimatorSet animator, Runnable completion) {
         int token = ++pageAnimationToken;
         pageAnimator = animator;
+        if (scroll != null) scroll.setAnimationSampling(true);
         animator.addListener(new AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(Animator animation) {
                 if (token != pageAnimationToken) return;
                 pageAnimator = null;
+                if (scroll != null) scroll.setAnimationSampling(false);
                 completion.run();
+                sampleBarsAfterLayout();
             }
         });
         animator.start();
@@ -584,6 +595,7 @@ public final class BridgeScreen {
             pageAnimator.cancel();
             pageAnimator = null;
         }
+        if (scroll != null) scroll.setAnimationSampling(false);
     }
 
     private void completePage(LinearLayout target) {
@@ -593,6 +605,7 @@ public final class BridgeScreen {
         resetPage(target);
         target.setVisibility(View.VISIBLE);
         visiblePage = target;
+        sampleBarsAfterLayout();
     }
 
     private void hidePage(LinearLayout page) {
@@ -619,6 +632,27 @@ public final class BridgeScreen {
             visiblePage = predictiveSource;
         }
         clearPredictivePages();
+        sampleBarsAfterLayout();
+    }
+
+    /** Re-samples the page once the new chrome has been laid out. */
+    private void sampleBarsAfterLayout() {
+        if (scroll == null) return;
+        scroll.markContentDirty();
+        scroll.post(this::sampleBars);
+    }
+
+    private void sampleBars() {
+        if (scroll != null) scroll.sampleContent();
+    }
+
+    /** Keeps the page content below the current top bar mode and window insets. */
+    private void applyTopBarPadding() {
+        // Until the first insets arrive, keep the initial TOP_BAR_HEIGHT_DP fallback instead
+        // of overwriting the status-bar height with zero.
+        if (body == null || topBar == null || contentInsetTop < 0) return;
+        body.setPadding(contentInsetLeft, contentInsetTop + topBar.contentHeightPx(),
+                contentInsetRight, contentInsetBottom);
     }
 
     private void clearPredictivePages() {
@@ -626,32 +660,9 @@ public final class BridgeScreen {
         predictiveTarget = null;
     }
 
-    private static CouiBackButtonView addCouiBackButton(AppCompatActivity activity,
-                                                         FrameLayout root, MiuixAppBar appBar,
-                                                         boolean visible) {
-        CouiBackButtonView button = new CouiBackButtonView(activity, appBar);
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                dp(activity, 64), dp(activity, 104), Gravity.TOP | Gravity.START);
-        params.leftMargin = dp(activity, 2);
-        params.topMargin = dp(activity, 0);
-        root.addView(button, params);
-        button.setContourGlowEnabled(UiStyle.contourGlow(activity));
-        button.setVisibility(visible ? View.VISIBLE : View.GONE);
-        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            FrameLayout.LayoutParams current =
-                    (FrameLayout.LayoutParams) button.getLayoutParams();
-            int top = Math.max(0, bars.top - dp(activity, 24));
-            if (current.topMargin != top) {
-                current.topMargin = top;
-                button.setLayoutParams(current);
-            }
-            return insets;
-        });
-        return button;
-    }
-
     private static void configureEdgeToEdge(AppCompatActivity activity) {
+        // WindowInsetsHelper.initialWindowInsetsListener is not needed here: MiuixAppBar has no
+        // remaining call sites under app/src, so this screen owns its own insets handling.
         Window window = activity.getWindow();
         WindowCompat.setDecorFitsSystemWindows(window, false);
         window.setBackgroundDrawable(new ColorDrawable(ContextCompat.getColor(activity,
@@ -665,7 +676,6 @@ public final class BridgeScreen {
                 WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightStatusBars(!dark);
         controller.setAppearanceLightNavigationBars(!dark);
-        WindowInsetsHelper.initialWindowInsetsListener(activity);
     }
 
     private static int surfaceRes(Context context) {

@@ -335,7 +335,7 @@ private fun Modifier.floatingSurfaces(
                 group.forEach { index ->
                     val node = nodes[index]
                     val material = materials[index]
-                    appendPatch(materialLayers[index], node.materialRect(material.extension),
+                    appendPatch(materialLayers[index], node.materialRect(material.extension, material.blurRadius),
                         blendMode = if (foregroundComposition) ComposeBlendMode.SrcOver else ComposeBlendMode.Src,
                         includePrefix = !foregroundComposition) { bounds ->
                         val height = bounds.height
