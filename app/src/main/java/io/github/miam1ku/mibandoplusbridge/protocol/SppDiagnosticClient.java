@@ -86,6 +86,14 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private Consumer<java.util.List<BandHistoryParser.Measurement>> onSleepFile;
     private volatile LiveCommandQueue liveCommands;
     private int unsupportedProtobufFrames;
+    private int protocolMismatchFrames;
+    /**
+     * Experimental voice channels are observed and acknowledged by default because rejecting
+     * them outright used to kill the SPP link before the first audio packet. Diagnostic builds
+     * can opt back into the strict state machine so a mismatch fails loudly instead of silently
+     * leaving the session on wrong assumptions.
+     */
+    private volatile boolean strictProtocol;
     private final DeviceLogMassGate deviceLogGate;
     private Result verifiedDevice;
     private boolean liveHold;
@@ -106,6 +114,16 @@ public final class SppDiagnosticClient implements AutoCloseable {
 
     static boolean shouldLogUnsupportedFrame(int count) {
         return count == 1 || count % 100 == 0;
+    }
+
+    /** Enforces a state-machine precondition only when strict diagnostics are enabled. */
+    static void enforceProtocol(boolean strictProtocol, String strictCode) throws Failure {
+        if (strictProtocol) throw new Failure(strictCode);
+    }
+
+    /** Diagnostic builds may re-enable fail-fast protocol checks. Never enabled in release paths. */
+    public void setStrictProtocol(boolean strict) {
+        strictProtocol = strict;
     }
 
     /** Optional experimental channels are observed; their sequence counters never advance commands. */
@@ -1162,6 +1180,9 @@ public final class SppDiagnosticClient implements AutoCloseable {
         }
         var data = SppV2Codec.parseData(frame);
         if (data.flags() != 0) {
+            logProtocolMismatch("VOICE_UNSUPPORTED", data, sequence, frame.frx(),
+                    authenticated ? SppV2Codec.OPCODE_ENCRYPTED : SppV2Codec.OPCODE_PLAINTEXT);
+            enforceProtocol(strictProtocol, "UNSUPPORTED_DATA_CHANNEL");
             observeUnknownData(frame);
             return null;
         }
@@ -1204,11 +1225,18 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 }
                 return null;
             }
+            logProtocolMismatch("VOICE_UNSUPPORTED", data, sequence, frame.frx(),
+                    authenticated ? SppV2Codec.OPCODE_ENCRYPTED : SppV2Codec.OPCODE_PLAINTEXT);
+            enforceProtocol(strictProtocol, "UNSUPPORTED_DATA_CHANNEL");
             observeUnknownData(frame);
             return null;
         }
         int expectedOpcode = authenticated ? SppV2Codec.OPCODE_ENCRYPTED : SppV2Codec.OPCODE_PLAINTEXT;
         if (data.opcode() != expectedOpcode) {
+            // A mismatch here is a state-machine self-check, not an unknown feature: the link
+            // believed it was encrypted while the peer sent something else.
+            logProtocolMismatch("VOICE_STATE_MISMATCH", data, sequence, frame.frx(), expectedOpcode);
+            enforceProtocol(strictProtocol, "ENCRYPTION_STATE_MISMATCH");
             observeUnknownData(frame);
             return null;
         }
@@ -1270,6 +1298,23 @@ public final class SppDiagnosticClient implements AutoCloseable {
                 sendFrame(new SppV2Codec.Frame(SppV2Codec.TYPE_ACK, sequence, new byte[0]));
             }
         }
+    }
+
+    private void logProtocolMismatch(String code, SppV2Codec.Data data, int sequence, boolean frx,
+                                     int expectedOpcode) {
+        protocolMismatchFrames++;
+        int count = protocolMismatchFrames;
+        if (!shouldLogUnsupportedFrame(count)) return;
+        SessionLog.line(context, code
+                + " channel=" + data.channel()
+                + " opcode=" + data.opcode()
+                + " expectedOpcode=" + expectedOpcode
+                + " flags=" + data.flags()
+                + " authenticated=" + authenticated
+                + " seq=" + sequence
+                + " frx=" + frx
+                + " strict=" + strictProtocol
+                + " count=" + count);
     }
 
     private void prepareHistory() throws Exception {

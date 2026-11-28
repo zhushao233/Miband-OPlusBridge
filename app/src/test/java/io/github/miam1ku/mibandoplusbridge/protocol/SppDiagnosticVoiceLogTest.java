@@ -5,6 +5,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public final class SppDiagnosticVoiceLogTest {
@@ -20,5 +21,22 @@ public final class SppDiagnosticVoiceLogTest {
         assertFalse(SppDiagnosticClient.shouldLogUnsupportedFrame(2));
         assertFalse(SppDiagnosticClient.shouldLogUnsupportedFrame(99));
         assertFalse(SppDiagnosticClient.shouldLogUnsupportedFrame(101));
+    }
+
+    @Test public void strictProtocolRejectsEncryptionStateMismatch() {
+        SppDiagnosticClient.Failure thrown = assertThrows(SppDiagnosticClient.Failure.class,
+                () -> SppDiagnosticClient.enforceProtocol(true, "ENCRYPTION_STATE_MISMATCH"));
+        assertEquals("ENCRYPTION_STATE_MISMATCH", thrown.getMessage());
+    }
+
+    @Test public void strictProtocolRejectsUnsupportedChannel() {
+        SppDiagnosticClient.Failure thrown = assertThrows(SppDiagnosticClient.Failure.class,
+                () -> SppDiagnosticClient.enforceProtocol(true, "UNSUPPORTED_DATA_CHANNEL"));
+        assertEquals("UNSUPPORTED_DATA_CHANNEL", thrown.getMessage());
+    }
+
+    @Test public void permissiveProtocolObservesInsteadOfThrowing() throws Exception {
+        SppDiagnosticClient.enforceProtocol(false, "ENCRYPTION_STATE_MISMATCH");
+        SppDiagnosticClient.enforceProtocol(false, "UNSUPPORTED_DATA_CHANNEL");
     }
 }
