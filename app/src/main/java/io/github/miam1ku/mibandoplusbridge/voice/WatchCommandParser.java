@@ -12,6 +12,15 @@ import java.util.regex.Pattern;
  * <p>Only explicit device intents are captured, so ordinary questions still reach the model.
  * Relative durations are represented as a one-shot alarm because the current Xiaomi SPP
  * schedule service exposes alarms but no native countdown start command.</p>
+ *
+ * <p>Two intent rules are deliberate:</p>
+ * <ul>
+ *   <li>“打开闹钟” opens the firmware alarm app, while “查看/看看闹钟” lists alarms through the
+ *       schedule service. The verb decides between the app shortcut and the schedule query.</li>
+ *   <li>{@code DELETE_ALARM_AT} names one exact entry that the user can add again, so it needs
+ *       no second confirmation. “全部/最近一个” can delete many or an unknown entry and does
+ *       require the confirmation word.</li>
+ * </ul>
  */
 public final class WatchCommandParser {
     private static final Pattern CLOCK = Pattern.compile(
@@ -104,6 +113,8 @@ public final class WatchCommandParser {
 
         if (alarm || reminder) {
             if (target == null) {
+                // An impossible clock ("25点") belongs to the model; asking again would loop.
+                if (CLOCK.matcher(text).find() || HOUR.matcher(text).find()) return null;
                 return withConfirmation(WatchCommand.of(WatchCommand.Kind.ASK_ALARM_TIME),
                         confirmed);
             }

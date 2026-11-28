@@ -121,4 +121,101 @@ public final class WatchCommandParserTest {
         assertNull(WatchCommandParser.parse("今天适合跑步吗", NOW));
         assertNull(WatchCommandParser.parse("给我讲个笑话", NOW));
     }
+
+    @Test public void alarmTimesAcceptArabicChineseAndFullWidthDigits() {
+        assertAlarm("设置7点的闹钟", 7, 0);
+        assertAlarm("七点的闹钟", 7, 0);
+        assertAlarm("两点的闹钟", 2, 0);
+        assertAlarm("十点的闹钟", 10, 0);
+        assertAlarm("二十三点的闹钟", 23, 0);
+        assertAlarm("7:30的闹钟", 7, 30);
+        assertAlarm("７：３０的闹钟", 7, 30);
+    }
+
+    @Test public void alarmTimeFractionsAreParsed() {
+        assertAlarm("七点半的闹钟", 7, 30);
+        assertAlarm("七点一刻的闹钟", 7, 15);
+        assertAlarm("七点三刻的闹钟", 7, 45);
+        assertAlarm("七点三十分的闹钟", 7, 30);
+        assertAlarm("七点五分的闹钟", 7, 5);
+    }
+
+    @Test public void periodPrefixesShiftTheHour() {
+        assertAlarm("明早七点的闹钟", 7, 0);
+        assertAlarm("上午十点的闹钟", 10, 0);
+        assertAlarm("下午三点的闹钟", 15, 0);
+        assertAlarm("晚上八点的闹钟", 20, 0);
+        assertAlarm("中午一点的闹钟", 13, 0);
+        assertAlarm("中午十二点的闹钟", 12, 0);
+        assertAlarm("凌晨十二点的闹钟", 0, 0);
+        assertAlarm("凌晨两点的闹钟", 2, 0);
+    }
+
+    @Test public void intentVerbChoosesTheSameAlarmTarget() {
+        assertAlarm("设置七点的闹钟", 7, 0);
+        assertAlarm("设七点的闹钟", 7, 0);
+        assertAlarm("定七点的闹钟", 7, 0);
+        assertAlarm("七点的闹钟", 7, 0);
+
+        assertEquals(WatchCommand.WatchApp.ALARM,
+                WatchCommandParser.parse("打开闹钟", NOW).app());
+        assertEquals(WatchCommand.Kind.LIST_ALARMS,
+                WatchCommandParser.parse("看看闹钟", NOW).kind());
+
+        assertEquals(WatchCommand.Kind.DELETE_ALARM_AT,
+                WatchCommandParser.parse("取消七点的闹钟", NOW).kind());
+        assertEquals(WatchCommand.Kind.DELETE_ALARM_AT,
+                WatchCommandParser.parse("删除七点的闹钟", NOW).kind());
+        assertEquals(WatchCommand.Kind.DELETE_ALARM_AT,
+                WatchCommandParser.parse("关闭七点的闹钟", NOW).kind());
+    }
+
+    @Test public void repeatWordsSetTheDailyFlag() {
+        assertTrue(WatchCommandParser.parse("每天七点的闹钟", NOW).daily());
+        assertTrue(WatchCommandParser.parse("每日七点的闹钟", NOW).daily());
+        assertFalse(WatchCommandParser.parse("七点的闹钟", NOW).daily());
+    }
+
+    @Test public void durationsCombineHoursMinutesAndFractions() {
+        assertTimer("计时十分钟", 10);
+        assertTimer("半小时后提醒我", 30);
+        assertTimer("一个半小时后叫我", 90);
+        assertTimer("一小时20分钟后提醒我", 80);
+        assertTimer("两小时后叫我", 120);
+        assertTimer("计时二十三分钟", 23);
+    }
+
+    @Test public void confirmedFlagOnlyFollowsTheConfirmationWord() {
+        var all = WatchCommandParser.parse("确认取消所有闹钟", NOW);
+        assertEquals(WatchCommand.Kind.DELETE_ALL_ALARMS, all.kind());
+        assertTrue(all.confirmed());
+
+        var next = WatchCommandParser.parse("取消闹钟", NOW);
+        assertEquals(WatchCommand.Kind.DELETE_NEXT_ALARM, next.kind());
+        assertFalse(next.confirmed());
+
+        var nextConfirmed = WatchCommandParser.parse("确认取消最近一个闹钟", NOW);
+        assertEquals(WatchCommand.Kind.DELETE_NEXT_ALARM, nextConfirmed.kind());
+        assertTrue(nextConfirmed.confirmed());
+    }
+
+    @Test public void impossibleTimesAndQuestionsReachTheModel() {
+        assertNull(WatchCommandParser.parse("25点的闹钟", NOW));
+        assertNull(WatchCommandParser.parse("设置七点六十分", NOW));
+        assertNull(WatchCommandParser.parse("现在几点了", NOW));
+        assertNull(WatchCommandParser.parse("今天适合跑步吗", NOW));
+    }
+
+    private static void assertAlarm(String text, int hour, int minute) {
+        WatchCommand command = WatchCommandParser.parse(text, NOW);
+        assertEquals(text, WatchCommand.Kind.SET_ALARM, command.kind());
+        assertEquals(text, hour, command.hour());
+        assertEquals(text, minute, command.minute());
+    }
+
+    private static void assertTimer(String text, int minutes) {
+        WatchCommand command = WatchCommandParser.parse(text, NOW);
+        assertEquals(text, WatchCommand.Kind.SET_TIMER, command.kind());
+        assertEquals(text, minutes, command.minutes());
+    }
 }
