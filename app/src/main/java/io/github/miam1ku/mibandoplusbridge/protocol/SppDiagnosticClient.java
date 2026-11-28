@@ -64,7 +64,8 @@ public final class SppDiagnosticClient implements AutoCloseable {
     private volatile boolean closed;
     private volatile boolean timedOut;
     private volatile String linkStop;
-    private volatile String closeReason = "caller-close";
+    private final java.util.concurrent.atomic.AtomicReference<String> closeReason =
+            new java.util.concurrent.atomic.AtomicReference<>("caller-close");
     private final AtomicBoolean closeLogged = new AtomicBoolean();
     private final Object writeLock = new Object();
     private InputStream input;
@@ -460,7 +461,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
         });
         var deadline = watchdog.schedule(() -> {
             timedOut = true;
-            closeReason = "handshake-deadline";
+            closeReason.set("handshake-deadline");
             close();
         }, deadlineSeconds, TimeUnit.SECONDS);
         byte[] phoneNonce = new byte[16];
@@ -934,7 +935,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
             if (failure instanceof Failure typed && "ICON_CHUNK_TIMEOUT".equals(typed.code)) throw failure;
             linkStop = failure instanceof Failure typed ? typed.code : failure.getClass().getSimpleName();
             SessionLog.line(context, "link stop " + linkStop);
-            closeReason = "live-command-write-failed";
+            closeReason.set("live-command-write-failed");
             close();
             throw failure;
         }
@@ -977,7 +978,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
             linkStop = failure instanceof Failure typed ? typed.code
                     : failure.getClass().getSimpleName();
             SessionLog.line(context, "link stop " + linkStop + " reason=aivs-write");
-            closeReason = "aivs-write-failed";
+            closeReason.set("aivs-write-failed");
             close();
             throw failure;
         }
@@ -1596,7 +1597,7 @@ public final class SppDiagnosticClient implements AutoCloseable {
     @Override public void close() {
         LiveCommandQueue commands = liveCommands;
         if (closeLogged.compareAndSet(false, true)) {
-            SessionLog.line(context, "spp close reason=" + closeReason
+            SessionLog.line(context, "spp close reason=" + closeReason.get()
                     + " linkStop=" + (linkStop == null ? "" : linkStop)
                     + " framing=" + framing + " auth=" + authenticated
                     + " live=" + liveHold);
