@@ -123,7 +123,10 @@ public final class SppDiagnosticClient implements AutoCloseable {
         if (strictProtocol) throw new Failure(strictCode);
     }
 
-    /** Diagnostic builds may re-enable fail-fast protocol checks. Never enabled in release paths. */
+    /**
+     * 仅供诊断构建通过 adb/调试注入调用；发布路径永不启用。
+     * 目前没有 UI 入口，需要时由开发者手动接线（例如调试页开关或 {@code BuildConfig.DEBUG}）。
+     */
     public void setStrictProtocol(boolean strict) {
         strictProtocol = strict;
     }
